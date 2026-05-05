@@ -1,9 +1,10 @@
 import type { ThreeEvent } from '@react-three/fiber'
-import type { Object3D } from 'three'
 import mitt from 'mitt'
+import type { Object3D } from 'three'
 import type {
   BuildingNode,
   CeilingNode,
+  ColumnNode,
   DoorNode,
   FenceNode,
   ItemNode,
@@ -12,6 +13,7 @@ import type {
   RoofSegmentNode,
   SiteNode,
   SlabNode,
+  SpawnNode,
   StairNode,
   StairSegmentNode,
   WallNode,
@@ -53,7 +55,9 @@ export type BuildingEvent = NodeEvent<BuildingNode>
 export type LevelEvent = NodeEvent<LevelNode>
 export type ZoneEvent = NodeEvent<ZoneNode>
 export type SlabEvent = NodeEvent<SlabNode>
+export type SpawnEvent = NodeEvent<SpawnNode>
 export type CeilingEvent = NodeEvent<CeilingNode>
+export type ColumnEvent = NodeEvent<ColumnNode>
 export type RoofEvent = NodeEvent<RoofNode>
 export type RoofSegmentEvent = NodeEvent<RoofSegmentNode>
 export type StairEvent = NodeEvent<StairNode>
@@ -100,6 +104,19 @@ export interface ThumbnailGenerateEvent {
   snapLevels?: boolean
 }
 
+export interface CameraControlFitSceneEvent {
+  /**
+   * XZ-plane axis-aligned bounds for camera framing. Omitted values let the
+   * listener choose its default framing pose.
+   */
+  bounds?: {
+    min: [number, number]
+    max: [number, number]
+    center: [number, number]
+    size: [number, number]
+  }
+}
+
 type CameraControlEvents = {
   'camera-controls:view': CameraControlEvent
   'camera-controls:focus': CameraControlEvent
@@ -107,6 +124,7 @@ type CameraControlEvents = {
   'camera-controls:top-view': undefined
   'camera-controls:orbit-cw': undefined
   'camera-controls:orbit-ccw': undefined
+  'camera-controls:fit-scene': CameraControlFitSceneEvent
   'camera-controls:generate-thumbnail': ThumbnailGenerateEvent
 }
 
@@ -144,7 +162,9 @@ type EditorEvents = GridEvents &
   NodeEvents<'level', LevelEvent> &
   NodeEvents<'zone', ZoneEvent> &
   NodeEvents<'slab', SlabEvent> &
+  NodeEvents<'spawn', SpawnEvent> &
   NodeEvents<'ceiling', CeilingEvent> &
+  NodeEvents<'column', ColumnEvent> &
   NodeEvents<'roof', RoofEvent> &
   NodeEvents<'roof-segment', RoofSegmentEvent> &
   NodeEvents<'stair', StairEvent> &

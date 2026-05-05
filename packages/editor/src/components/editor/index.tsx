@@ -584,9 +584,9 @@ const ViewerSceneContent = memo(function ViewerSceneContent({
   return (
     <>
       {!isFirstPersonMode && <SelectionManager />}
-      {!isVersionPreviewMode && !isFirstPersonMode && <BoxSelectTool />}
-      {!isVersionPreviewMode && !isFirstPersonMode && <FloatingActionMenu />}
-      {!isVersionPreviewMode && !isFirstPersonMode && <FloatingBuildingActionMenu />}
+      {!(isVersionPreviewMode || isFirstPersonMode) && <BoxSelectTool />}
+      {!(isVersionPreviewMode || isFirstPersonMode) && <FloatingActionMenu />}
+      {!(isVersionPreviewMode || isFirstPersonMode) && <FloatingBuildingActionMenu />}
       {!isFirstPersonMode && <WallMeasurementLabel />}
       <ExportManager />
       {isFirstPersonMode ? <ViewerZoneSystem /> : <ZoneSystem />}
@@ -594,10 +594,10 @@ const ViewerSceneContent = memo(function ViewerSceneContent({
       <CeilingSelectionAffordanceSystem />
       <RoofEditSystem />
       <StairEditSystem />
-      {!isLoading && !isFirstPersonMode && (
+      {!(isLoading || isFirstPersonMode) && (
         <Grid cellColor="#aaa" fadeDistance={500} sectionColor="#ccc" />
       )}
-      {!(isLoading || isVersionPreviewMode) && !isFirstPersonMode && <ToolManager />}
+      {!(isLoading || isVersionPreviewMode || isFirstPersonMode) && <ToolManager />}
       {isFirstPersonMode && <FirstPersonControls />}
       <CustomCameraControls />
       <ThumbnailGenerator onThumbnailCapture={onThumbnailCapture} />
@@ -939,8 +939,8 @@ export default function Editor({
   presetsAdapter,
   commandPaletteEmptyAction,
 }: EditorProps) {
-  useKeyboard({ isVersionPreviewMode })
-
+  const isFirstPersonMode = useEditor((s) => s.isFirstPersonMode)
+  useKeyboard({ isVersionPreviewMode, disabled: isFirstPersonMode })
   const { isLoadingSceneRef } = useAutoSave({
     onSave,
     onDirty,
@@ -951,7 +951,8 @@ export default function Editor({
   const [isSceneLoading, setIsSceneLoading] = useState(false)
   const [hasLoadedInitialScene, setHasLoadedInitialScene] = useState(false)
   const isPreviewMode = useEditor((s) => s.isPreviewMode)
-  const isFirstPersonMode = useEditor((s) => s.isFirstPersonMode)
+  const firstPersonPreviousLevelRef = useRef(useViewer.getState().selection.levelId)
+  const wasFirstPersonModeRef = useRef(isFirstPersonMode)
 
   const sidebarWidth = useSidebarStore((s) => s.width)
   const isSidebarCollapsed = useSidebarStore((s) => s.isCollapsed)
@@ -968,6 +969,39 @@ export default function Editor({
       useViewer.getState().setProjectId(null)
     }
   }, [projectId])
+
+  useEffect(() => {
+    const wasFirstPersonMode = wasFirstPersonModeRef.current
+    wasFirstPersonModeRef.current = isFirstPersonMode
+
+    if (isFirstPersonMode && !wasFirstPersonMode) {
+      const viewer = useViewer.getState()
+      firstPersonPreviousLevelRef.current = viewer.selection.levelId
+      viewer.setCameraMode('perspective')
+      viewer.setWallMode('up')
+      viewer.setWalkthroughMode(true)
+      viewer.setSelection({ selectedIds: [], zoneId: null })
+      return
+    }
+
+    if (!(wasFirstPersonMode && !isFirstPersonMode)) return
+
+    const viewer = useViewer.getState()
+    const previousLevelId = firstPersonPreviousLevelRef.current
+    firstPersonPreviousLevelRef.current = null
+    viewer.setWalkthroughMode(false)
+
+    if (!previousLevelId) return
+
+    const previousLevelNode = useScene.getState().nodes[previousLevelId]
+    if (previousLevelNode?.type === 'level') {
+      viewer.setSelection({
+        levelId: previousLevelId,
+        zoneId: null,
+        selectedIds: [],
+      })
+    }
+  }, [isFirstPersonMode])
 
   // Load scene on mount (or when onLoad identity changes, e.g. project switch)
   useEffect(() => {
@@ -1074,7 +1108,13 @@ export default function Editor({
       return <Component />
     }
 
-    const tabBarTabs = sidebarTabs?.map(({ id, label }) => ({ id, label })) ?? []
+    const tabBarTabs =
+      sidebarTabs?.map(({ id, label, mobileDefaultSnap, mobileIcon }) => ({
+        id,
+        label,
+        mobileDefaultSnap,
+        mobileIcon,
+      })) ?? []
 
     return (
       <PresetsProvider adapter={presetsAdapter}>
@@ -1121,7 +1161,7 @@ export default function Editor({
             />
             {/* First-person overlay — rendered on top of normal layout */}
             {isFirstPersonMode && (
-              <div className="fixed inset-0 z-50 pointer-events-none">
+              <div className="pointer-events-none fixed inset-0 z-50">
                 <FirstPersonOverlay onExit={() => useEditor.getState().setFirstPersonMode(false)} />
               </div>
             )}

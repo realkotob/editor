@@ -3,6 +3,7 @@ import {
   type AnyNodeId,
   type BuildingNode,
   type CeilingNode,
+  type ColumnNode,
   emitter,
   type FenceNode,
   getMaterialPresetByRef,
@@ -65,6 +66,7 @@ type SelectableNodeType =
   | 'wall'
   | 'fence'
   | 'item'
+  | 'column'
   | 'building'
   | 'zone'
   | 'slab'
@@ -73,6 +75,7 @@ type SelectableNodeType =
   | 'roof-segment'
   | 'stair'
   | 'stair-segment'
+  | 'spawn'
   | 'window'
   | 'door'
 
@@ -332,7 +335,7 @@ function applyStairPaintPreview(
 }
 
 function applySingleSurfacePaintPreview(
-  node: FenceNode | SlabNode | CeilingNode,
+  node: FenceNode | ColumnNode | SlabNode | CeilingNode,
   material: ActivePaintMaterial,
 ): PaintPreviewCleanup | null {
   if (node.type === 'ceiling') {
@@ -376,11 +379,31 @@ function applySingleSurfacePaintPreview(
     }
   }
 
-  const mesh = getRegisteredMesh(node.id)
-  if (!mesh) return null
+  const registeredObject = getRegisteredNodeObject(node.id)
+  const mesh =
+    registeredObject && (registeredObject as Mesh).isMesh ? (registeredObject as Mesh) : null
 
   const previewMaterial = getSingleSurfacePreviewMaterial(material)
   if (!previewMaterial) return null
+
+  if (node.type === 'column') {
+    if (!registeredObject) return null
+    const restores: PaintPreviewCleanup[] = []
+
+    registeredObject.traverse((object) => {
+      if (!(object as Mesh).isMesh) return
+      restores.push(previewMeshMaterial(object as Mesh, previewMaterial))
+    })
+
+    if (restores.length === 0) return null
+    return () => {
+      for (let index = restores.length - 1; index >= 0; index -= 1) {
+        restores[index]?.()
+      }
+    }
+  }
+
+  if (!mesh) return null
 
   if (node.type === 'slab') {
     const slabMaterial = previewMaterial.clone()
@@ -541,6 +564,7 @@ const SELECTION_STRATEGIES: Record<string, SelectionStrategy> = {
       'wall',
       'fence',
       'item',
+      'column',
       'zone',
       'slab',
       'ceiling',
@@ -548,6 +572,7 @@ const SELECTION_STRATEGIES: Record<string, SelectionStrategy> = {
       'roof-segment',
       'stair',
       'stair-segment',
+      'spawn',
       'window',
       'door',
     ],
@@ -593,12 +618,14 @@ const SELECTION_STRATEGIES: Record<string, SelectionStrategy> = {
       if (
         node.type === 'wall' ||
         node.type === 'fence' ||
+        node.type === 'column' ||
         node.type === 'slab' ||
         node.type === 'ceiling' ||
         node.type === 'roof' ||
         node.type === 'roof-segment' ||
         node.type === 'stair' ||
-        node.type === 'stair-segment'
+        node.type === 'stair-segment' ||
+        node.type === 'spawn'
       )
         return true
       if (node.type === 'item') {
@@ -655,12 +682,14 @@ const getSelectionTarget = (node: AnyNode): SelectionTarget | null => {
   if (
     node.type === 'wall' ||
     node.type === 'fence' ||
+    node.type === 'column' ||
     node.type === 'slab' ||
     node.type === 'ceiling' ||
     node.type === 'roof' ||
     node.type === 'roof-segment' ||
     node.type === 'stair' ||
     node.type === 'stair-segment' ||
+    node.type === 'spawn' ||
     node.type === 'window' ||
     node.type === 'door'
   ) {
@@ -853,7 +882,12 @@ export const SelectionManager = () => {
         }
       }
 
-      if (node.type === 'fence' || node.type === 'slab' || node.type === 'ceiling') {
+      if (
+        node.type === 'fence' ||
+        node.type === 'column' ||
+        node.type === 'slab' ||
+        node.type === 'ceiling'
+      ) {
         const compatible = hasActivePaintMaterial(activePaintMaterial)
 
         return {
@@ -866,17 +900,16 @@ export const SelectionManager = () => {
                   .getState()
                   .updateNode(
                     node.id as AnyNodeId,
-                    buildSingleSurfaceMaterialPatch<FenceNode | SlabNode | CeilingNode>(
-                      activePaintMaterial.material,
-                      activePaintMaterial.materialPreset,
-                    ),
+                    buildSingleSurfaceMaterialPatch<
+                      FenceNode | ColumnNode | SlabNode | CeilingNode
+                    >(activePaintMaterial.material, activePaintMaterial.materialPreset),
                   )
               }
             : null,
           preview: compatible
             ? () =>
                 applySingleSurfacePaintPreview(
-                  node as FenceNode | SlabNode | CeilingNode,
+                  node as FenceNode | ColumnNode | SlabNode | CeilingNode,
                   activePaintMaterial,
                 )
             : () => previewCursor('not-allowed'),
@@ -959,12 +992,14 @@ export const SelectionManager = () => {
       'wall',
       'fence',
       'item',
+      'column',
       'slab',
       'ceiling',
       'roof',
       'roof-segment',
       'stair',
       'stair-segment',
+      'spawn',
       'window',
       'door',
       'zone',
@@ -1126,6 +1161,7 @@ export const SelectionManager = () => {
       'wall',
       'fence',
       'item',
+      'column',
       'building',
       'zone',
       'slab',
@@ -1134,6 +1170,7 @@ export const SelectionManager = () => {
       'roof-segment',
       'stair',
       'stair-segment',
+      'spawn',
       'window',
       'door',
     ]
@@ -1221,12 +1258,14 @@ export const SelectionManager = () => {
       } else if (
         node.type === 'wall' ||
         node.type === 'fence' ||
+        node.type === 'column' ||
         node.type === 'slab' ||
         node.type === 'ceiling' ||
         node.type === 'roof' ||
         node.type === 'roof-segment' ||
         node.type === 'stair' ||
         node.type === 'stair-segment' ||
+        node.type === 'spawn' ||
         node.type === 'window' ||
         node.type === 'door'
       ) {
@@ -1272,6 +1311,7 @@ export const SelectionManager = () => {
       'wall',
       'fence',
       'item',
+      'column',
       'building',
       'slab',
       'ceiling',
@@ -1279,6 +1319,7 @@ export const SelectionManager = () => {
       'roof-segment',
       'stair',
       'stair-segment',
+      'spawn',
       'window',
       'door',
       'zone',
@@ -1344,6 +1385,7 @@ export const SelectionManager = () => {
       'wall',
       'fence',
       'item',
+      'column',
       'slab',
       'ceiling',
       'roof',
