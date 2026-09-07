@@ -52,6 +52,24 @@ export function showInScene(obj: Object3D, reason: HiddenReason): void {
   delete holder[HOLD]
 }
 
+export function temporarilyShowShadowOnly(root: Object3D): () => void {
+  const masks = new Map<Object3D, number>()
+  root.traverse((obj) => {
+    const hold = (obj as Holder)[HOLD]
+    if (!hold?.reasons.has('shadow-only')) return
+    masks.set(obj, obj.layers.mask)
+    const reasons = new Set(hold.reasons)
+    reasons.delete('shadow-only')
+    // A capture needs the original scene geometry, while editor overlays and
+    // objects hidden by isolation or batching must retain their own masks.
+    if (reasons.size === 0) obj.layers.mask = hold.original
+    else applyHold(obj, { original: hold.original, reasons })
+  })
+  return () => {
+    for (const [obj, mask] of masks) obj.layers.mask = mask
+  }
+}
+
 function applyHold(obj: Object3D, hold: Hold): void {
   obj.layers.mask = hold.original
   obj.layers.disable(SCENE_LAYER)
