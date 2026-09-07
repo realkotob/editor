@@ -299,6 +299,7 @@ export * from './services'
 export { isMovable, movePlanToward, moveToward, resolveMovable } from './services/movement'
 export {
   acquireSceneHistoryPause,
+  activeSceneCommitNodeIds,
   getSceneHistoryPauseDepth,
   pauseSceneHistory,
   resetSceneHistoryPauseDepth,

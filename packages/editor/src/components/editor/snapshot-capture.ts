@@ -1,5 +1,13 @@
-import type { SnapshotCaptureFailedEvent, SnapshotCapturePose } from '@pascal-app/core'
+import type {
+  SnapshotCaptureFailedEvent,
+  SnapshotCapturePose,
+  SnapshotSavedEvent,
+} from '@pascal-app/core'
 import { MathUtils, type PerspectiveCamera } from 'three'
+
+export function isOverlaySnapshotSave(event: SnapshotSavedEvent | undefined, projectId: string) {
+  return !event?.requestId && (!event?.projectId || event.projectId === projectId)
+}
 
 export function createSnapshotQueue() {
   let tail = Promise.resolve()

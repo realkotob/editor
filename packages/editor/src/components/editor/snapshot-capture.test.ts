@@ -5,8 +5,18 @@ import {
   applySnapshotCapturePose,
   captureSnapshotScene,
   createSnapshotQueue,
+  isOverlaySnapshotSave,
   runSnapshotCapture,
 } from './snapshot-capture'
+
+test('manual capture feedback ignores background requests and other projects', () => {
+  const saved = { id: 'frame', url: 'https://example.test/frame.webp', width: 1920, height: 1080 }
+  expect(isOverlaySnapshotSave(undefined, 'project')).toBe(true)
+  expect(isOverlaySnapshotSave(saved, 'project')).toBe(true)
+  expect(isOverlaySnapshotSave({ ...saved, projectId: 'project' }, 'project')).toBe(true)
+  expect(isOverlaySnapshotSave({ ...saved, projectId: 'other' }, 'project')).toBe(false)
+  expect(isOverlaySnapshotSave({ ...saved, requestId: 'background' }, 'project')).toBe(false)
+})
 
 describe('capture scene restoration', () => {
   test('restores all presentation changes before GPU readback settles', async () => {
