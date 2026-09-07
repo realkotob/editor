@@ -286,9 +286,9 @@ export function SnapshotCaptureOverlay({ projectId }: { projectId: string }) {
   // still: a late WASD tap or mouse twitch must not shift the frame out from
   // under the shot the user just took.
   useEffect(() => {
-    useEditor.getState().setCaptureShutterHold(captureState !== 'idle')
+    useEditor.getState().setCaptureShutterHold(isCaptureMode && captureState !== 'idle')
     return () => useEditor.getState().setCaptureShutterHold(false)
-  }, [captureState])
+  }, [captureState, isCaptureMode])
 
   const dismiss = useCallback(() => setCaptureMode(false), [setCaptureMode])
 

@@ -34,6 +34,7 @@ import {
   applySnapshotCapturePose,
   captureSnapshotScene,
   createSnapshotQueue,
+  enqueueSnapshotCapture,
   runSnapshotCapture,
 } from './snapshot-capture'
 
@@ -67,7 +68,7 @@ function clampSnapshotSize(width: number, height: number): { w: number; h: numbe
 export const ThumbnailGenerator = ({ onThumbnailCapture }: ThumbnailGeneratorProps) => {
   const gl = useThree((state) => state.gl)
   const scene = useThree((state) => state.scene)
-  const mainCamera = useThree((state) => state.camera)
+  const getThree = useThree((state) => state.get)
   const controls = useThree((state) => state.controls) as CameraControls | null
   const isGenerating = useRef(false)
   const captureQueue = useRef(createSnapshotQueue())
@@ -133,6 +134,7 @@ export const ThumbnailGenerator = ({ onThumbnailCapture }: ThumbnailGeneratorPro
             throw new Error('The active project changed before capture')
           const thumbnailCamera = thumbnailCameraRef.current
           if (!thumbnailCamera) throw new Error('Snapshot camera is not ready')
+          const { camera: mainCamera, controls } = getThree()
           if (cameraPose && (snapLevels || (captureMode && captureMode !== 'standard'))) {
             throw new Error('An explicit snapshot camera requires standard capture mode')
           }
@@ -372,7 +374,7 @@ export const ThumbnailGenerator = ({ onThumbnailCapture }: ThumbnailGeneratorPro
         (failure) => emitter.emit('snapshot:capture-failed', failure),
       )
     },
-    [gl, scene, mainCamera, controls],
+    [gl, scene, getThree],
   )
 
   // Thumbnail request via emitter. Two call shapes:
@@ -382,27 +384,20 @@ export const ThumbnailGenerator = ({ onThumbnailCapture }: ThumbnailGeneratorPro
   //    to their true positions first for a consistent auto-thumbnail angle.
   // The caller owns policy (when to fire, whether the tab is visible).
   useEffect(() => {
-    let active = true
     const handleGenerateThumbnail = async (event: ThumbnailGenerateEvent) => {
       // A saved-frame notification can enqueue the next shot frame before
       // its predecessor's host callback returns and releases the renderer.
-      await captureQueue.current(event, async () => {
-        if (!active) {
-          if (event.requestId) {
-            emitter.emit('snapshot:capture-failed', {
-              requestId: event.requestId,
-              error: 'The scene changed before capture. Try again.',
-            })
-          }
-          return
-        }
-        await generate(event)
-      })
+      await enqueueSnapshotCapture(
+        captureQueue.current,
+        captureVersion,
+        event,
+        generate,
+        (failure) => emitter.emit('snapshot:capture-failed', failure),
+      )
     }
 
     emitter.on('camera-controls:generate-thumbnail', handleGenerateThumbnail)
     return () => {
-      active = false
       emitter.off('camera-controls:generate-thumbnail', handleGenerateThumbnail)
     }
   }, [generate])

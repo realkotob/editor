@@ -1,10 +1,15 @@
 import { describe, expect, test } from 'bun:test'
-import type { SnapshotCaptureFailedEvent, SnapshotCapturePose } from '@pascal-app/core'
+import type {
+  SnapshotCaptureFailedEvent,
+  SnapshotCapturePose,
+  ThumbnailGenerateEvent,
+} from '@pascal-app/core'
 import { Euler, PerspectiveCamera, Quaternion, Vector3 } from 'three'
 import {
   applySnapshotCapturePose,
   captureSnapshotScene,
   createSnapshotQueue,
+  enqueueSnapshotCapture,
   isOverlaySnapshotSave,
   runSnapshotCapture,
 } from './snapshot-capture'
@@ -136,6 +141,102 @@ describe('explicit snapshot camera', () => {
 })
 
 describe('snapshot request correlation', () => {
+  test('queued authored frames survive a viewport camera and callback replacement', async () => {
+    const enqueue = createSnapshotQueue()
+    const version = { current: 1 }
+    const failures: SnapshotCaptureFailedEvent[] = []
+    const captured: ThumbnailGenerateEvent[] = []
+    let release!: () => void
+    const background = enqueue(
+      {},
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    await Promise.resolve()
+    let viewportCamera = new PerspectiveCamera()
+    const pose: SnapshotCapturePose = {
+      position: [4, 2, -3],
+      quaternion: [0, 0, 0, 1],
+      fov: 47,
+    }
+    const event: ThumbnailGenerateEvent = {
+      projectId: 'project',
+      requestId: 'frame',
+      captureMode: 'standard',
+      cameraPose: pose,
+    }
+    const generate = async (request: ThumbnailGenerateEvent) => {
+      const captureCamera = viewportCamera.clone()
+      applySnapshotCapturePose(
+        captureCamera,
+        request.cameraPose!,
+        { width: 1600, height: 900 },
+        { w: 1920, h: 1080 },
+      )
+      expect(captureCamera.position.toArray()).toEqual(pose.position)
+      captured.push(request)
+    }
+    const first = enqueueSnapshotCapture(enqueue, version, event, generate, (failure) =>
+      failures.push(failure),
+    )
+    viewportCamera = new PerspectiveCamera(90)
+    viewportCamera.position.set(20, 10, 5)
+    const second = enqueueSnapshotCapture(
+      enqueue,
+      version,
+      { ...event, requestId: 'next-frame' },
+      async (request) => generate(request),
+      (failure) => failures.push(failure),
+    )
+    release()
+    await Promise.all([background, first, second])
+    expect(captured.map((request) => request.requestId)).toEqual(['frame', 'next-frame'])
+    expect(viewportCamera.position.toArray()).toEqual([20, 10, 5])
+    expect(failures).toEqual([])
+  })
+
+  test('disposing the capture pipeline cancels queued frames before the replacement scene renders', async () => {
+    const enqueue = createSnapshotQueue()
+    const version = { current: 1 }
+    const failures: SnapshotCaptureFailedEvent[] = []
+    const captured: string[] = []
+    let release!: () => void
+    const background = enqueue(
+      {},
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    await Promise.resolve()
+    const capture = async (event: ThumbnailGenerateEvent) => {
+      captured.push(event.requestId!)
+    }
+    const oldFrame = enqueueSnapshotCapture(
+      enqueue,
+      version,
+      { projectId: 'old', requestId: 'old-frame' },
+      capture,
+      (failure) => failures.push(failure),
+    )
+    version.current += 1
+    const newFrame = enqueueSnapshotCapture(
+      enqueue,
+      version,
+      { projectId: 'new', requestId: 'new-frame' },
+      capture,
+      (failure) => failures.push(failure),
+    )
+    release()
+    await Promise.all([background, oldFrame, newFrame])
+    expect(captured).toEqual(['new-frame'])
+    expect(failures).toEqual([
+      { requestId: 'old-frame', error: 'The scene changed before capture. Try again.' },
+    ])
+  })
+
   test.each([
     'standard',
     'viewport',

@@ -27,6 +27,28 @@ export function createSnapshotQueue() {
   }
 }
 
+export function enqueueSnapshotCapture(
+  enqueue: ReturnType<typeof createSnapshotQueue>,
+  version: { current: number },
+  event: ThumbnailGenerateEvent,
+  capture: (event: ThumbnailGenerateEvent) => Promise<void>,
+  reportFailure: (failure: SnapshotCaptureFailedEvent) => void,
+) {
+  const requestedVersion = version.current
+  return enqueue(event, async () => {
+    if (requestedVersion !== version.current) {
+      if (event.requestId) {
+        reportFailure({
+          requestId: event.requestId,
+          error: 'The scene changed before capture. Try again.',
+        })
+      }
+      return
+    }
+    await capture(event)
+  })
+}
+
 export async function captureSnapshotScene<T>(
   capture: (restore: (callback: () => void) => void) => T | Promise<T>,
 ): Promise<T> {
