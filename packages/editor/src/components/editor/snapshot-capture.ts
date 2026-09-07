@@ -2,6 +2,7 @@ import type {
   SnapshotCaptureFailedEvent,
   SnapshotCapturePose,
   SnapshotSavedEvent,
+  ThumbnailGenerateEvent,
 } from '@pascal-app/core'
 import { MathUtils, type PerspectiveCamera } from 'three'
 
@@ -11,8 +12,16 @@ export function isOverlaySnapshotSave(event: SnapshotSavedEvent | undefined, pro
 
 export function createSnapshotQueue() {
   let tail = Promise.resolve()
-  return (capture: () => Promise<void>) => {
-    const pending = tail.then(capture)
+  let pendingCount = 0
+  return (
+    event: Pick<ThumbnailGenerateEvent, 'requestId' | 'captureMode'>,
+    capture: () => Promise<void>,
+  ) => {
+    if (pendingCount > 0 && !event.requestId && !event.captureMode) return Promise.resolve()
+    pendingCount += 1
+    const pending = tail.then(capture).finally(() => {
+      pendingCount -= 1
+    })
     tail = pending.catch(() => {})
     return pending
   }

@@ -384,10 +384,9 @@ export const ThumbnailGenerator = ({ onThumbnailCapture }: ThumbnailGeneratorPro
   useEffect(() => {
     let active = true
     const handleGenerateThumbnail = async (event: ThumbnailGenerateEvent) => {
-      if (!event.requestId && isGenerating.current) return
       // A saved-frame notification can enqueue the next shot frame before
       // its predecessor's host callback returns and releases the renderer.
-      await captureQueue.current(async () => {
+      await captureQueue.current(event, async () => {
         if (!active) {
           if (event.requestId) {
             emitter.emit('snapshot:capture-failed', {
