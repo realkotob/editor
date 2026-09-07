@@ -29,9 +29,11 @@ import { backdropGradient, deepSkyColor, horizonHazeColor } from '../../lib/back
 import { edgeColorFor, edgeOpacityScaleFor } from '../../lib/edge-style'
 import { PERF_OVERLAY_ENABLED } from '../../lib/gpu-perf'
 import { inkedEdges } from '../../lib/ink-edges'
+import { LayerPassIndex, LayerPassNode } from '../../lib/layer-pass'
 import { GRID_LAYER, OVERLAY_LAYER, SCENE_LAYER, ZONE_LAYER } from '../../lib/layers'
 import { mergedOutline } from '../../lib/merged-outline-node'
 import { recordPerfSample, timeSpan } from '../../lib/perf-tracks'
+import { PostProcessingResources } from '../../lib/post-processing-resources'
 import { getSceneTheme } from '../../lib/scene-themes'
 import { packNormalToRGB, unpackRGBToNormal } from '../../lib/tsl-compat'
 import useViewer from '../../store/use-viewer'
@@ -192,7 +194,7 @@ const PostProcessingPasses = ({
   disablePostFx?: boolean
 }) => {
   const { gl: renderer, invalidate, scene, camera, size } = useThree()
-  const renderPipelineRef = useRef<RenderPipeline | null>(null)
+  const resourcesRef = useRef<PostProcessingResources | null>(null)
   const hasPipelineErrorRef = useRef(false)
   const retryCountRef = useRef(0)
   const rebuildTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -336,10 +338,8 @@ const PostProcessingPasses = ({
     if (width < 1 || height < 1) {
       skippedZeroSizeRef.current = true
       hasPipelineErrorRef.current = false
-      if (renderPipelineRef.current) {
-        renderPipelineRef.current.dispose()
-      }
-      renderPipelineRef.current = null
+      resourcesRef.current?.dispose()
+      resourcesRef.current = null
       return
     }
 
@@ -355,10 +355,8 @@ const PostProcessingPasses = ({
     // allocated every pass.
     if (disablePostFx || perfDisable.postFx) {
       hasPipelineErrorRef.current = false
-      if (renderPipelineRef.current) {
-        renderPipelineRef.current.dispose()
-      }
-      renderPipelineRef.current = null
+      resourcesRef.current?.dispose()
+      resourcesRef.current = null
       return
     }
     const ssgiEnabled = shading === 'rendered' && SSGI_PARAMS.enabled && !perfDisable.ao
@@ -402,7 +400,7 @@ const PostProcessingPasses = ({
     const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator
     if (!hasWebGPU) {
       hasPipelineErrorRef.current = true
-      renderPipelineRef.current = null
+      resourcesRef.current = null
       return
     }
 
@@ -414,16 +412,22 @@ const PostProcessingPasses = ({
     outliner.selectedObjects.length = 0
     outliner.hoveredObjects.length = 0
 
-    let outlineNode: ReturnType<typeof mergedOutline> | null = null
+    const resources = new PostProcessingResources()
+    resourcesRef.current = resources
     try {
+      const layerIndex = new LayerPassIndex(scene, [ZONE_LAYER, OVERLAY_LAYER])
+      resources.layerIndex = layerIndex
       const scenePass = pass(scene, camera)
+      resources.passes.push(scenePass)
       scenePass.setLayers(sceneOnlyLayers)
-      const zonePass = pass(scene, camera)
+      const zonePass = new LayerPassNode(layerIndex, camera, ZONE_LAYER, scenePass)
+      resources.passes.push(zonePass)
       zonePass.setLayers(zoneLayers)
       // Editor overlays (gizmos, move handles, tool previews, grid) on their own
       // layer, kept out of the depth/normal MRT above so the ink + SSGI ignore
       // them, then composited on top of the final image below.
-      const overlayPass = pass(scene, camera)
+      const overlayPass = new LayerPassNode(layerIndex, camera, OVERLAY_LAYER, scenePass)
+      resources.passes.push(overlayPass)
       overlayPass.setLayers(overlayLayers)
       const overlayColor = overlayPass.getTextureNode('output')
 
@@ -557,13 +561,15 @@ const PostProcessingPasses = ({
       let compositeWithOutlines = sceneColor
       let visualAlpha = contentAlpha
       if (outlineEnabled) {
-        outlineNode = mergedOutline(scene, camera, {
+        const outlineNode = mergedOutline(scene, camera, {
           sceneDepthNode: scenePassDepth,
           primaryObjects: outliner.selectedObjects,
           secondaryObjects: outliner.hoveredObjects,
           primaryEdgeThickness: uniform(1),
           secondaryEdgeThickness: uniform(1.5),
         })
+
+        resources.outline = outlineNode
 
         // Selected: white visible, yellow hidden
         const selectedVisibleColor = uniform(new Color(0xff_ff_ff))
@@ -636,13 +642,12 @@ const PostProcessingPasses = ({
       }
 
       const renderPipeline = new RenderPipeline(renderer as unknown as WebGPURenderer)
+      resources.pipeline = renderPipeline
       renderPipeline.outputColorTransform = !transparentBackground
       renderPipeline.outputNode = finalOutput
-      renderPipelineRef.current = renderPipeline
       retryCountRef.current = 0
     } catch (error) {
-      outlineNode?.dispose()
-      outlineNode = null
+      resources.dispose()
       hasPipelineErrorRef.current = true
       console.error(
         '[viewer/post-processing] Failed to set up post-processing pipeline. Rendering without post FX.',
@@ -653,18 +658,12 @@ const PostProcessingPasses = ({
         },
         error,
       )
-      if (renderPipelineRef.current) {
-        renderPipelineRef.current.dispose()
-      }
-      renderPipelineRef.current = null
+      resourcesRef.current = null
     }
 
     return () => {
-      outlineNode?.dispose()
-      if (renderPipelineRef.current) {
-        renderPipelineRef.current.dispose()
-      }
-      renderPipelineRef.current = null
+      resources.dispose()
+      if (resourcesRef.current === resources) resourcesRef.current = null
     }
   }, [
     // NOTE: hoverHighlightMode intentionally excluded — the hover style is
@@ -745,7 +744,7 @@ const PostProcessingPasses = ({
       disablePostFx ||
       PERF_POST_FX_DISABLED ||
       hasPipelineErrorRef.current ||
-      !renderPipelineRef.current
+      !resourcesRef.current?.pipeline
     ) {
       try {
         const clearAlpha = transparentBackground ? 0 : 1
@@ -765,7 +764,7 @@ const PostProcessingPasses = ({
       return
     }
 
-    const pipeline = renderPipelineRef.current
+    const pipeline = resourcesRef.current.pipeline
     try {
       // Clear alpha=0 so background pixels in the output MRT attachment (index 0) get a=0,
       // making scenePassColor.a a reliable geometry mask (geometry pixels write a=1 via output node).
@@ -784,10 +783,8 @@ const PostProcessingPasses = ({
         rendererCtor: (renderer as any).constructor?.name,
         error,
       })
-      if (renderPipelineRef.current) {
-        renderPipelineRef.current.dispose()
-      }
-      renderPipelineRef.current = null
+      resourcesRef.current?.dispose()
+      resourcesRef.current = null
 
       if (retryCountRef.current < MAX_PIPELINE_RETRIES) {
         // Auto-retry: schedule a pipeline rebuild if we haven't exceeded the retry limit
