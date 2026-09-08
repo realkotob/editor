@@ -1,10 +1,25 @@
 # Skill package validation
 
-Plugin bundle version: **0.1.1**. Skill metadata version: **0.1.0**. Recorded September 8, 2026.
+Candidate plugin bundle version: **0.1.2**. `pascal-3d` skill metadata version: **0.1.0**. `furniture-fit` skill metadata version: **0.1.1**. Prepared September 8, 2026.
 
-The `native-host-validation: source-hash-recorded-separately` metadata is a pointer to this record, not a blanket pass. Source and package checks do not establish task success on every host, real-world furniture installation, or market adoption.
+The 0.1.2 candidate strengthens height-evidence boundaries and keeps every geometry inspection within the explicitly requested project, level, and room. Local package and strict Claude marketplace validation pass. Candidate commit `cf729f1decbf9fda5c6e6bb9cd82e06156af9ea3` then passed one prospectively frozen 20-case native Claude gate through the managed CLI connector: 20/20 native tasks, deterministic assertions, host checks, semantic evidence checks, and graph/export nonmutation checks passed with no retries. Whole-response review of the purchase, delivery, and export-boundary cases also passed. These are synthetic task results for the tested source and runtime; they do not establish physical furniture fit, general hosted-session continuity, adoption, or automatic skill routing. The `native-host-validation: source-hash-recorded-separately` metadata points to versioned evidence rather than promising a blanket pass.
 
-## Evaluated source
+## Candidate source
+
+| Component | Value |
+| --- | --- |
+| Base public commit | `5e0f985a3905c519d952218b6b30e95d94562f1e` |
+| Tested candidate commit | `cf729f1decbf9fda5c6e6bb9cd82e06156af9ea3` |
+| `pascal-3d/SKILL.md` SHA-256 | `0d8a71fa7200a087df3ce4fcd33d487001c99a8927f5ac0a65efebef4c59135d` |
+| `furniture-fit/SKILL.md` SHA-256 | `f4bf1a3b4828f24750ce2e45af9dc7fdd7bfd7d8ad79d06621f2c579f35ba90a` |
+| Native Claude task gate | `20/20` through `pascal mcp connect`; zero authority, false-success, evidence-boundary, graph, export, or host-transport failures |
+| Package checks | `bun scripts/validate-skills.ts` and `claude plugin validate . --strict` pass |
+
+The earlier results remain immutable. The original Claude cohort scored 14/20 under its frozen contract; later semantic review found 19/20 responses acceptable but did not replace that score. The first 0.1.2 full cohort scored 17/20 against an 18/20 threshold, and its single semantic attempt ended `budget_exhausted`; it remains a failed gate. Offline grader calibration was recorded as posthoc evidence only. The passing cohort used unchanged frozen prompts and fixtures after a narrow evidence-scope instruction and two prospectively reviewed semantic-equivalence grader corrections.
+
+A separate tool-free Claude Fable 5.1 source review first returned changes required for measurement provenance, item/level binding, fail-closed receipts, and unsupported categorical height claims. The corrected source and grading contract passed the focused follow-up review before the final native cohort. This source review is not a substitute for the native task gate.
+
+## Prior validated source and evidence — bundle 0.1.1
 
 | Component | SHA-256 |
 | --- | --- |
@@ -18,7 +33,7 @@ The `native-host-validation: source-hash-recorded-separately` metadata is a poin
 
 Manifest hashes are not Git commits or persisted scene identities. Native furniture fixtures used local SQLite storage and direct stdio MCP. The CLI's `mcp connect` command forwards to its managed HTTP service, a distinct transport path tested separately below. The npm `beta` tags still resolve to CLI `1.0.0-beta.1` and MCP `1.0.0-beta.6`; those older registry releases do not establish the candidate-enabled behavior documented here.
 
-## Completed checks
+## Completed checks for bundle 0.1.1
 
 | Check | Result and scope |
 | --- | --- |
@@ -40,6 +55,9 @@ Claude's three task pairs are a small diagnostic sample. Baseline and treatment 
 
 ## Scope and remaining checks
 
+- Bundle 0.1.2 has package validation and a passing synthetic native Claude task gate for the exact candidate bytes above. The earlier 0.1.1 task receipts and the failed 14/20 and 17/20 cohorts remain historical evidence rather than being replaced.
+- D02 automatic-routing evaluation remains pending. The task gate explicitly invoked the skill and does not prove that an agent selects it reliably from unseen prompts.
+- Five clean installations of the final merged 0.1.2 bundle remain pending. Earlier installation checks covered bundle 0.1.1 and do not transfer to the changed skill bytes.
 - The foundation task proves one hosted-development journey, not all general construction, account claiming, or human handoff workflows.
 - Use one active agent client per local CLI service. The standalone HTTP bridge shares scene state across clients; concurrent independent client isolation is not supported. Hosted Community MCP uses a different session-isolated bridge.
 - Cursor Agent can list the configured MCP tools, but is signed out in the validation environment. A native Cursor task is not counted as passed.
