@@ -1,6 +1,12 @@
 # Skill package validation
 
-Release package source: **0.1.4**. `pascal-3d` skill metadata version: **0.1.0**. `furniture-fit` skill metadata version: **0.1.3**. Recorded September 9, 2026.
+Candidate package source: **0.1.5**. Latest released package source: **0.1.4**. `pascal-3d` skill metadata version: **0.1.0**. `furniture-fit` skill metadata version: **0.1.3**. Recorded September 9, 2026.
+
+## Bundle 0.1.5 OpenAI submission readiness candidate
+
+This candidate adds the portable root Agent Plugins manifest while retaining the Codex compatibility manifest and Claude marketplace package. Its OpenAI listing metadata fits the final public-directory limits: display and short-description copy are at most 30 characters, starter prompts are at most 128 characters, and the package supplies a square bundled logo asset plus public website, support, privacy, and terms URLs. The repository validator keeps the portable and compatibility OpenAI interfaces identical and rejects screenshots for this skills-only package. Shared publishing fixtures moved out of `skills/`, leaving only valid immediate skill directories for OpenAI archive ingestion.
+
+These source checks do not submit or publish the plugin. OpenAI Platform access, a verified matching developer or business identity, portal review, country selection, policy attestations, and the developer's separate publish action remain external requirements. The existing publishing suite provides more than the required five positive and three negative cases, but the submitter must enter reviewer-ready cases and release notes in the portal and resolve any automated skill-scan findings.
 
 ## Bundle 0.1.4 release source
 

@@ -5,7 +5,15 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const skillNames = ['pascal-3d', 'furniture-fit'] as const
 const skillVersions = { 'pascal-3d': '0.1.0', 'furniture-fit': '0.1.3' } as const
-const pluginVersion = '0.1.4'
+const pluginVersion = '0.1.5'
+const portablePluginSchema = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'
+const openAiListingLimits = {
+  displayName: 30,
+  shortDescription: 30,
+  longDescription: 4000,
+  developerName: 80,
+} as const
+const openAiDefaultPromptLimit = 128
 const furnitureNextActionKinds = [
   'request_measurement',
   'check_alternate_pose',
@@ -79,6 +87,12 @@ function walk(path: string): string[] {
     }
   }
   return files
+}
+
+for (const entry of readdirSync(join(root, 'skills'), { withFileTypes: true })) {
+  if (entry.isDirectory() && !skillNames.includes(entry.name as (typeof skillNames)[number])) {
+    fail(`OpenAI skills directory contains an unexpected non-skill directory: ${entry.name}`)
+  }
 }
 
 for (const skillName of skillNames) {
@@ -421,7 +435,7 @@ for (const [semanticCase, requirement] of requiredSemanticCases) {
   }
 }
 
-const publishingFile = join(root, 'skills', 'evals', 'publishing-cases.json')
+const publishingFile = join(root, 'plugin-evals', 'publishing-cases.json')
 const publishing = parseJson(publishingFile) as {
   cases?: Array<{
     id?: unknown
@@ -458,6 +472,7 @@ if (negativePublishingCases < 3) fail('Publishing suite needs at least 3 negativ
 
 const claudePlugin = parseJson(join(root, '.claude-plugin', 'plugin.json'))
 const claudeMarketplace = parseJson(join(root, '.claude-plugin', 'marketplace.json'))
+const portablePlugin = parseJson(join(root, 'plugin.json'))
 const codexPlugin = parseJson(join(root, '.codex-plugin', 'plugin.json'))
 const codexMarketplace = parseJson(join(root, '.agents', 'plugins', 'marketplace.json'))
 
@@ -467,6 +482,78 @@ for (const [label, manifest] of [
 ] as const) {
   if (manifest.name !== 'pascal-agent-skills') fail(`${label}: unexpected name`)
   if (manifest.version !== pluginVersion) fail(`${label}: version must be ${pluginVersion}`)
+}
+
+if (portablePlugin.$schema !== portablePluginSchema) {
+  fail(`Portable plugin must declare ${portablePluginSchema}`)
+}
+if (portablePlugin.name !== codexPlugin.name) fail('Portable and Codex plugin names must match')
+if (portablePlugin.version !== pluginVersion) {
+  fail(`Portable plugin version must be ${pluginVersion}`)
+}
+if (portablePlugin.description !== codexPlugin.description) {
+  fail('Portable and Codex plugin descriptions must match')
+}
+const extensions = portablePlugin.extensions as Record<string, unknown> | undefined
+const openAiExtension = extensions?.['com.openai'] as Record<string, unknown> | undefined
+const portableInterface = openAiExtension?.interface as Record<string, unknown> | undefined
+const codexInterface = codexPlugin.interface as Record<string, unknown> | undefined
+if (!portableInterface) fail('Portable plugin must declare extensions.com.openai.interface')
+if (JSON.stringify(portableInterface) !== JSON.stringify(codexInterface)) {
+  fail('Portable and Codex OpenAI interfaces must match')
+}
+
+for (const [field, limit] of Object.entries(openAiListingLimits)) {
+  const value = portableInterface?.[field]
+  const mustBeSingleLine = field !== 'longDescription'
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    (mustBeSingleLine && value.includes('\n')) ||
+    value.length > limit
+  ) {
+    fail(
+      `OpenAI ${field} must be non-empty${mustBeSingleLine ? ', single-line,' : ''} and at most ${limit} characters`,
+    )
+  }
+}
+const defaultPrompts = portableInterface?.defaultPrompt
+if (!Array.isArray(defaultPrompts) || defaultPrompts.length === 0 || defaultPrompts.length > 3) {
+  fail('OpenAI defaultPrompt must contain between 1 and 3 prompts')
+} else {
+  for (const prompt of defaultPrompts) {
+    if (
+      typeof prompt !== 'string' ||
+      !prompt ||
+      prompt.includes('\n') ||
+      prompt.length > openAiDefaultPromptLimit ||
+      prompt.includes('@')
+    ) {
+      fail(
+        `OpenAI default prompts must be non-empty single lines of at most ${openAiDefaultPromptLimit} characters without @mentions`,
+      )
+    }
+  }
+}
+for (const field of ['websiteURL', 'supportURL', 'privacyPolicyURL', 'termsOfServiceURL']) {
+  const value = portableInterface?.[field]
+  if (typeof value !== 'string' || !value.startsWith('https://')) {
+    fail(`OpenAI ${field} must be an HTTPS URL`)
+  }
+}
+for (const field of ['composerIcon', 'logo']) {
+  const value = portableInterface?.[field]
+  if (typeof value !== 'string' || !value.startsWith('./')) {
+    fail(`OpenAI ${field} must be a plugin-relative path starting with ./`)
+    continue
+  }
+  const asset = resolve(root, value)
+  if (!asset.startsWith(`${root}/`) || !existsSync(asset)) {
+    fail(`OpenAI ${field} must reference an existing file inside the plugin`)
+  }
+}
+if ('screenshots' in (portableInterface ?? {})) {
+  fail('Skills-only OpenAI plugin must not declare screenshots')
 }
 
 if (codexPlugin.skills !== './skills/') fail('Codex plugin must point to canonical ./skills/')
@@ -525,5 +612,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `Validated ${skillNames.length} skills (${skillNames.map((name) => `${name}@${skillVersions[name]}`).join(', ')}) and both plugin manifests at ${pluginVersion}.`,
+  `Validated ${skillNames.length} skills (${skillNames.map((name) => `${name}@${skillVersions[name]}`).join(', ')}) and portable, Codex, and Claude plugin manifests at ${pluginVersion}.`,
 )
