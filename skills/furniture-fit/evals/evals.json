@@ -89,6 +89,19 @@
         "Labels the conclusion as a manual height-versus-clear-height comparison rather than a Pascal footprint-tool result.",
         "Keeps the project unchanged."
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "My measured Pascal room is 4.00 m wide by 3.00 m deep. The wardrobe is 1.80 m wide and 2.20 m tall, but its depth is missing. Check whether it fits centered in the room. This is read only. Do not infer a depth; request only the decisive missing measurement.",
+      "expected_output": "Stops with insufficient evidence, preserves the supplied dimensions and target, asks only for wardrobe depth, and does not calculate conditional fit thresholds or call assessment tools.",
+      "files": [],
+      "expectations": [
+        "Returns insufficient evidence because wardrobe depth is decisive for the requested footprint conclusion.",
+        "Preserves the supplied 1.80 m width, 2.20 m height, 4.00 m by 3.00 m room, centered pose, and read-only scope without substituting values.",
+        "Asks only for the wardrobe depth in a clear unit.",
+        "Does not state a maximum fitting depth, a conditional 'would fit' threshold, a height result, or an alternative pose while depth is missing.",
+        "Does not call candidate, collision, placement, validation, or save tools and does not mutate the project."
+      ]
     }
   ]
 }

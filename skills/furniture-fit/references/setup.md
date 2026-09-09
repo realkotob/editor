@@ -1,6 +1,6 @@
 # Connect Pascal for a furniture-fit assessment
 
-Source and public-documentation review date: 2026-09-08. Native task results are recorded separately with the evaluated source hash; source review alone does not prove every host or published runtime works.
+Source and public-documentation review date: 2026-09-09. Native task results are recorded separately with the evaluated source hash; source review alone does not prove every host or published runtime works.
 
 ## Local project
 
@@ -47,13 +47,15 @@ Use only one active agent client with each local CLI service. The standalone HTT
 
 ## Existing hosted project
 
-Create an API key in Pascal Settings for the same user or organization that owns the target project. Store it in the host's credential facility or an environment variable. The hosted Streamable HTTP endpoint is:
+Create an API key in Pascal Settings for the same user or organization that owns the target project. Set `PASCAL_API_KEY` to that key without printing it. If you assign it in a shell command, avoid or remove that command from shell history. The hosted Streamable HTTP endpoint is:
 
 ```text
 https://editor.pascal.app/api/mcp
 ```
 
 Codex CLI:
+
+Replace `paste_key_here` with the API key before running this example.
 
 ```bash
 export PASCAL_API_KEY="paste_key_here"
@@ -62,15 +64,17 @@ codex mcp add pascal \
   --bearer-token-env-var PASCAL_API_KEY
 ```
 
+Codex stores the environment-variable name, not its value. Set `PASCAL_API_KEY` again in each new terminal before starting Codex, or supply it through the user's existing shell or secret-manager configuration.
+
 Claude Code:
 
 ```bash
-export PASCAL_API_KEY="paste_key_here"
-claude mcp add --scope project --transport http pascal https://editor.pascal.app/api/mcp \
-  --header 'Authorization: Bearer ${PASCAL_API_KEY}'
+: "${PASCAL_API_KEY:?Set PASCAL_API_KEY to the apiKey returned by Pascal}" && \
+claude mcp add --scope user --transport http pascal https://editor.pascal.app/api/mcp \
+  --header "Authorization: Bearer $PASCAL_API_KEY"
 ```
 
-The single quotes preserve the environment reference in `.mcp.json`; the variable must be available when Claude starts. Never paste the key into a project file, report, prompt, screenshot, or URL.
+The guard exits before changing Claude Code configuration when the variable is unset or empty. Claude Code expands the variable during registration and stores the static Authorization header, including the key, in its private user configuration. The connection is then available in all Claude Code projects for that user. Keep the configuration private; use `--scope local` instead when the connection should remain local to the current project. Never paste the key into a project file, report, prompt, screenshot, or URL.
 
 ## Separate autonomous workspace
 

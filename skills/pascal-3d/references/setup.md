@@ -1,6 +1,6 @@
 # Pascal connection and credential setup
 
-Source and public-documentation review date: 2026-09-08. Native task results are recorded separately with the evaluated source hash; source review alone does not prove every host or published runtime works.
+Source and public-documentation review date: 2026-09-09. Native task results are recorded separately with the evaluated source hash; source review alone does not prove every host or published runtime works.
 
 Choose one path. Do not switch storage boundaries without the user's instruction.
 
@@ -82,9 +82,11 @@ Use the hosted endpoint when the user wants the agent to work in a Pascal accoun
 https://editor.pascal.app/api/mcp
 ```
 
-The user creates an API key in Pascal Settings and chooses the intended personal or organization workspace. Keep the key in an environment variable or the client's credential store.
+The user creates an API key in Pascal Settings and chooses the intended personal or organization workspace. Set `PASCAL_API_KEY` to that key without printing it. If you assign it in a shell command, avoid or remove that command from shell history.
 
 Codex CLI:
+
+Replace `paste_key_here` with the API key before running this example.
 
 ```bash
 export PASCAL_API_KEY="paste_key_here"
@@ -93,15 +95,19 @@ codex mcp add pascal \
   --bearer-token-env-var PASCAL_API_KEY
 ```
 
+Codex stores the environment-variable name, not its value. Set `PASCAL_API_KEY` again in each new terminal before starting Codex, or supply it through the user's existing shell or secret-manager configuration.
+
 Claude Code:
 
 ```bash
-export PASCAL_API_KEY="paste_key_here"
-claude mcp add --scope project --transport http pascal https://editor.pascal.app/api/mcp \
-  --header 'Authorization: Bearer ${PASCAL_API_KEY}'
+: "${PASCAL_API_KEY:?Set PASCAL_API_KEY to the apiKey returned by Pascal}" && \
+claude mcp add --scope user --transport http pascal https://editor.pascal.app/api/mcp \
+  --header "Authorization: Bearer $PASCAL_API_KEY"
 ```
 
-The single quotes preserve the environment reference in `.mcp.json`; the variable must be available when Claude starts. For JSON-based clients, prefer their environment-variable or secret interpolation rather than a literal key:
+The guard exits before changing Claude Code configuration when the variable is unset or empty. Claude Code expands the variable during registration and stores the static Authorization header, including the key, in its private user configuration. The connection is then available in all Claude Code projects for that user. Keep the configuration private; use `--scope local` instead when the connection should remain local to the current project.
+
+For other JSON-based clients, prefer their supported environment-variable or secret interpolation rather than a literal key:
 
 ```json
 {
