@@ -2,7 +2,7 @@
 
 import type { AnyNodeId, LevelNode } from '@pascal-app/core'
 import { useScene } from '@pascal-app/core'
-import { useViewer } from '@pascal-app/viewer'
+import { markPerfAction, useViewer } from '@pascal-app/viewer'
 import { Command, useCommandState } from 'cmdk'
 import { ChevronRight, Search } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { Dialog, DialogContent, DialogTitle } from './../../../components/ui/primitives/dialog'
+import { getLevelDisplayName } from '@pascal-app/core'
 import { useCommandRegistry } from '../../../store/use-command-registry'
 import { usePaletteViewRegistry } from '../../../store/use-palette-view-registry'
 
@@ -27,15 +28,13 @@ interface CommandPaletteStore {
   setInputValue: (value: string) => void
   navigateTo: (page: string) => void
   goBack: () => void
-  cameraScope: { nodeId: string; label: string } | null
-  setCameraScope: (scope: { nodeId: string; label: string } | null) => void
 }
 
 export const useCommandPalette = create<CommandPaletteStore>((set, get) => ({
   open: false,
   setOpen: (open) => {
     set({ open })
-    if (!open) set({ pages: [], inputValue: '', cameraScope: null, mode: 'command' })
+    if (!open) set({ pages: [], inputValue: '', mode: 'command' })
   },
   mode: 'command',
   setMode: (mode) => set({ mode }),
@@ -44,12 +43,8 @@ export const useCommandPalette = create<CommandPaletteStore>((set, get) => ({
   setInputValue: (value) => set({ inputValue: value }),
   navigateTo: (page) => set((s) => ({ pages: [...s.pages, page], inputValue: '' })),
   goBack: () => {
-    const { pages } = get()
-    if (pages[pages.length - 1] === 'camera-scope') set({ cameraScope: null })
     set((s) => ({ pages: s.pages.slice(0, -1), inputValue: '' }))
   },
-  cameraScope: null,
-  setCameraScope: (scope) => set({ cameraScope: scope }),
 }))
 
 // ---------------------------------------------------------------------------
@@ -157,8 +152,6 @@ const PAGE_LABEL: Record<string, string> = {
   'level-mode': 'Level Mode',
   'rename-level': 'Rename Level',
   'goto-level': 'Go to Level',
-  'camera-view': 'Camera Snapshot',
-  'camera-scope': '',
 }
 
 // ---------------------------------------------------------------------------
@@ -196,19 +189,8 @@ function EmptyActionItem({ action }: { action: CommandPaletteEmptyAction }) {
 // Main component
 // ---------------------------------------------------------------------------
 export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEmptyAction }) {
-  const {
-    open,
-    setOpen,
-    mode,
-    setMode,
-    pages,
-    inputValue,
-    setInputValue,
-    navigateTo,
-    goBack,
-    cameraScope,
-    setCameraScope,
-  } = useCommandPalette()
+  const { open, setOpen, mode, setMode, pages, inputValue, setInputValue, navigateTo, goBack } =
+    useCommandPalette()
 
   const [meta, setMeta] = useState('⌘')
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -232,11 +214,6 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
       ),
     ),
   )
-
-  const cameraScopeNode = useScene((s) =>
-    cameraScope ? s.nodes[cameraScope.nodeId as AnyNodeId] : null,
-  )
-  const hasScopeSnapshot = !!(cameraScopeNode as any)?.camera
 
   // Platform detection
   useEffect(() => {
@@ -267,10 +244,11 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
     setOpen(false)
   }
 
-  const wallModeLabel: Record<'cutaway' | 'up' | 'down', string> = {
+  const wallModeLabel: Record<'cutaway' | 'up' | 'down' | 'translucent', string> = {
     cutaway: 'Cutaway',
     up: 'Up',
     down: 'Down',
+    translucent: 'Translucent',
   }
   const levelModeLabel: Record<'manual' | 'stacked' | 'exploded' | 'solo', string> = {
     manual: 'Manual',
@@ -279,34 +257,10 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
     solo: 'Solo',
   }
 
-  // Camera snapshot helpers (used by sub-pages registered via EditorCommands)
   const confirmRename = () => {
     if (!(activeLevelId && inputValue.trim())) return
     run(() => {
       useScene.getState().updateNode(activeLevelId as AnyNodeId, { name: inputValue.trim() } as any)
-    })
-  }
-
-  const takeSnapshot = () => {
-    if (!cameraScope) return
-    import('@pascal-app/core').then(({ emitter }) => {
-      run(() =>
-        emitter.emit('camera-controls:capture', { nodeId: cameraScope.nodeId as AnyNodeId }),
-      )
-    })
-  }
-
-  const viewSnapshot = () => {
-    if (!(cameraScope && hasScopeSnapshot)) return
-    import('@pascal-app/core').then(({ emitter }) => {
-      run(() => emitter.emit('camera-controls:view', { nodeId: cameraScope.nodeId as AnyNodeId }))
-    })
-  }
-
-  const clearSnapshot = () => {
-    if (!(cameraScope && hasScopeSnapshot)) return
-    run(() => {
-      useScene.getState().updateNode(cameraScope.nodeId as AnyNodeId, { camera: undefined } as any)
     })
   }
 
@@ -363,9 +317,7 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
                   onClick={goBack}
                   type="button"
                 >
-                  {page === 'camera-scope'
-                    ? (cameraScope?.label ?? 'Snapshot')
-                    : (PAGE_LABEL[page] ?? views.get(page)?.label ?? page)}
+                  {PAGE_LABEL[page] ?? views.get(page)?.label ?? page}
                 </button>
               )}
               <Command.Input
@@ -422,7 +374,7 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
               {/* ── Wall Mode sub-page ────────────────────────────────────── */}
               {page === 'wall-mode' && (
                 <Command.Group heading="Wall Mode">
-                  {(['cutaway', 'up', 'down'] as const).map((mode) => (
+                  {(['cutaway', 'up', 'down', 'translucent'] as const).map((mode) => (
                     <OptionItem
                       isActive={wallMode === mode}
                       key={mode}
@@ -454,9 +406,14 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
                     <OptionItem
                       isActive={level.id === activeLevelId}
                       key={level.id}
-                      label={level.name ?? `Level ${level.level}`}
+                      label={getLevelDisplayName(level)}
                       onSelect={() =>
-                        run(() => useViewer.getState().setSelection({ levelId: level.id }))
+                        run(() => {
+                          if (level.id !== useViewer.getState().selection.levelId) {
+                            markPerfAction('level-switch', level.id)
+                          }
+                          useViewer.getState().setSelection({ levelId: level.id })
+                        })
                       }
                     />
                   ))}
@@ -498,207 +455,6 @@ export function CommandPalette({ emptyAction }: { emptyAction?: CommandPaletteEm
                       )}
                     </span>
                   </Command.Item>
-                </Command.Group>
-              )}
-
-              {/* ── Camera Snapshot: scope picker ─────────────────────────── */}
-              {page === 'camera-view' && (
-                <Command.Group heading="Camera Snapshot — Select Scope">
-                  <OptionItem
-                    icon={
-                      <svg
-                        className="h-4 w-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                        viewBox="0 0 24 24"
-                      >
-                        <path d="M3 3h18v18H3z" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M3 9h18M9 21V9" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    }
-                    label="Site"
-                    onSelect={() => {
-                      const { rootNodeIds } = useScene.getState()
-                      const siteId = rootNodeIds[0]
-                      if (siteId) {
-                        setCameraScope({ nodeId: siteId, label: 'Site' })
-                        navigateTo('camera-scope')
-                      }
-                    }}
-                  />
-                  <OptionItem
-                    icon={
-                      <svg
-                        className="h-4 w-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                        <polyline
-                          points="9 22 9 12 15 12 15 22"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    }
-                    label="Building"
-                    onSelect={() => {
-                      const building = Object.values(useScene.getState().nodes).find(
-                        (n) => n.type === 'building',
-                      )
-                      if (building) {
-                        setCameraScope({ nodeId: building.id, label: 'Building' })
-                        navigateTo('camera-scope')
-                      }
-                    }}
-                  />
-                  <OptionItem
-                    disabled={!activeLevelId}
-                    icon={
-                      <svg
-                        className="h-4 w-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          d="M12 2L2 7l10 5 10-5-10-5z"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                        <path
-                          d="M2 17l10 5 10-5M2 12l10 5 10-5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    }
-                    label="Level"
-                    onSelect={() => {
-                      if (activeLevelId) {
-                        setCameraScope({ nodeId: activeLevelId, label: 'Level' })
-                        navigateTo('camera-scope')
-                      }
-                    }}
-                  />
-                  <OptionItem
-                    disabled={!useViewer.getState().selection.selectedIds.length}
-                    icon={
-                      <svg
-                        className="h-4 w-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                        viewBox="0 0 24 24"
-                      >
-                        <path d="M5 3l14 9-14 9V3z" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    }
-                    label="Selection"
-                    onSelect={() => {
-                      const firstId = useViewer.getState().selection.selectedIds[0]
-                      if (firstId) {
-                        setCameraScope({ nodeId: firstId, label: 'Selection' })
-                        navigateTo('camera-scope')
-                      }
-                    }}
-                  />
-                </Command.Group>
-              )}
-
-              {/* ── Camera Snapshot: actions for selected scope ───────────── */}
-              {page === 'camera-scope' && cameraScope && (
-                <Command.Group heading={`${cameraScope.label} Snapshot`}>
-                  <OptionItem
-                    icon={
-                      <svg
-                        className="h-4 w-4"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                        <circle
-                          cx="12"
-                          cy="13"
-                          r="4"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    }
-                    label={hasScopeSnapshot ? 'Update Snapshot' : 'Take Snapshot'}
-                    onSelect={takeSnapshot}
-                  />
-                  {hasScopeSnapshot && (
-                    <OptionItem
-                      icon={
-                        <svg
-                          className="h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <circle
-                            cx="12"
-                            cy="12"
-                            r="3"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      }
-                      label="View Snapshot"
-                      onSelect={viewSnapshot}
-                    />
-                  )}
-                  {hasScopeSnapshot && (
-                    <OptionItem
-                      icon={
-                        <svg
-                          className="h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                          viewBox="0 0 24 24"
-                        >
-                          <polyline
-                            points="3 6 5 6 21 6"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <path
-                            d="M19 6l-1 14H6L5 6"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <path d="M10 11v6M14 11v6" strokeLinecap="round" strokeLinejoin="round" />
-                          <path d="M9 6V4h6v2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      }
-                      label="Clear Snapshot"
-                      onSelect={clearSnapshot}
-                    />
-                  )}
                 </Command.Group>
               )}
             </Command.List>

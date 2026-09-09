@@ -1,52 +1,23 @@
-import {
-  type CeilingNode,
-  type LevelNode,
-  sceneRegistry,
-  useScene,
-  type WallNode,
-} from '@pascal-app/core'
+import { getLevelElevations, type LevelNode, sceneRegistry, useScene } from '@pascal-app/core'
 
-export const DEFAULT_LEVEL_HEIGHT = 2.5
+export const EXPLODED_GAP = 5
 
-// Cache: levelId → computed height. Invalidated when the nodes reference changes.
-// Zustand produces a new `nodes` object on every mutation, so reference equality
-// is a zero-cost way to detect stale data without any subscription overhead.
-const heightCache = new Map<string, number>()
-let lastNodesRef: object | null = null
-
-export function getLevelHeight(
+/**
+ * The Y a level settles at under the given presentation mode — its stacked
+ * elevation plus the exploded gap. Analytic (scene store + mode), never a
+ * mesh read: a level created this frame has its Object3D at y=0 until
+ * LevelSystem lerps it, and a mode switch leaves meshes mid-lerp — camera
+ * code framing a level must aim at the destination, not the moving target.
+ */
+export function getLevelPresentationY(
   levelId: string,
-  nodes: ReturnType<typeof useScene.getState>['nodes'],
+  nodes: Record<string, unknown>,
+  levelMode: 'stacked' | 'exploded' | 'solo' | 'manual',
 ): number {
-  if (nodes !== lastNodesRef) {
-    heightCache.clear()
-    lastNodesRef = nodes
-  }
-
-  if (heightCache.has(levelId)) return heightCache.get(levelId)!
-
-  const level = nodes[levelId as LevelNode['id']] as LevelNode | undefined
-  if (!level) return DEFAULT_LEVEL_HEIGHT
-
-  let maxTop = 0
-
-  for (const childId of level.children) {
-    const child = nodes[childId as keyof typeof nodes]
-    if (!child) continue
-    if (child.type === 'ceiling') {
-      const ch = (child as CeilingNode).height ?? DEFAULT_LEVEL_HEIGHT
-      if (ch > maxTop) maxTop = ch
-    } else if (child.type === 'wall') {
-      let meshY = sceneRegistry.nodes.get(childId as any)?.position.y ?? 0
-      if (meshY < 0) meshY = 0
-      const top = meshY + ((child as WallNode).height ?? DEFAULT_LEVEL_HEIGHT)
-      if (top > maxTop) maxTop = top
-    }
-  }
-
-  const height = maxTop > 0 ? maxTop : DEFAULT_LEVEL_HEIGHT
-  heightCache.set(levelId, height)
-  return height
+  const level = nodes[levelId] as LevelNode | undefined
+  const baseY = getLevelElevations(nodes as never).get(levelId)?.baseY ?? 0
+  const explodedExtra = levelMode === 'exploded' && level ? level.level * EXPLODED_GAP : 0
+  return baseY + explodedExtra
 }
 
 /**
@@ -67,18 +38,20 @@ export function snapLevelsToTruePositions(): () => void {
   type LevelEntry = {
     obj: NonNullable<ReturnType<typeof sceneRegistry.nodes.get>>
     levelId: string
-    index: number
   }
 
   const entries: LevelEntry[] = []
-  sceneRegistry.byType.level.forEach((levelId) => {
+  sceneRegistry.byType.level!.forEach((levelId) => {
     const obj = sceneRegistry.nodes.get(levelId)
-    const level = nodes[levelId as LevelNode['id']]
+    const level = nodes[levelId as LevelNode['id']] as LevelNode | undefined
     if (obj && level) {
-      entries.push({ levelId, index: (level as any).level ?? 0, obj })
+      entries.push({
+        levelId,
+        obj,
+      })
     }
   })
-  entries.sort((a, b) => a.index - b.index)
+  const levelElevations = getLevelElevations(nodes)
 
   // Snapshot current Y and visibility so we can restore them after the render
   const snapshot = new Map(
@@ -86,11 +59,9 @@ export function snapLevelsToTruePositions(): () => void {
   )
 
   // Snap to true stacked positions and make all levels visible
-  let cumulativeY = 0
   for (const { levelId, obj } of entries) {
-    obj.position.y = cumulativeY
+    obj.position.y = levelElevations.get(levelId)?.baseY ?? 0
     obj.visible = true
-    cumulativeY += getLevelHeight(levelId, nodes)
   }
 
   return () => {

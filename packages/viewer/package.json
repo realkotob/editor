@@ -1,6 +1,6 @@
 {
   "name": "@pascal-app/viewer",
-  "version": "0.6.0",
+  "version": "1.0.0-beta.5",
   "description": "3D viewer component for Pascal building editor",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,26 +18,31 @@
   ],
   "scripts": {
     "build": "tsc --build",
-    "dev": "tsc --build --watch",
+    "dev": "tsgo --build --watch",
+    "test": "bun test src",
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "@pascal-app/core": "^0.6.0",
+    "@pascal-app/core": "^1.0.0-beta.5",
     "@react-three/drei": "^10",
     "@react-three/fiber": "^9",
     "react": "^18 || ^19",
-    "three": "^0.184"
+    "react-dom": "^18 || ^19",
+    "three": "^0.185"
   },
   "dependencies": {
-    "polygon-clipping": "^0.15.7",
+    "three-bvh-csg": "^0.0.18",
+    "three-mesh-bvh": "^0.9.8",
     "zustand": "^5"
   },
   "devDependencies": {
+    "@pascal-app/core": "^1.0.0-beta.5",
     "@pascal/typescript-config": "*",
-    "@types/node": "^25.5.0",
+    "@types/node": "^22",
     "@types/react": "^19.2.2",
+    "@types/react-dom": "19.2.2",
     "@types/three": "^0.184.0",
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   },
   "keywords": [
     "3d",

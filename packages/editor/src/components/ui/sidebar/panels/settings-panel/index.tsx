@@ -1,15 +1,23 @@
-import { emitter, useScene } from '@pascal-app/core'
+import {
+  clearSceneHistory,
+  emitter,
+  useScene,
+  type ParsedBuildJson,
+  validateBuildJson,
+} from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import { TreeView, VisualJson } from '@visual-json/react'
-import { Camera, Download, Save, Trash2, Upload } from 'lucide-react'
+import { Camera, Check, Copy, Download, Map as MapIcon, Save, Trash2, Upload } from 'lucide-react'
 import {
   type KeyboardEvent,
   type SyntheticEvent,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react'
+import { exportFloorplanPdf } from '../../../../../lib/floorplan/floorplan-export'
 import { Button } from './../../../../../components/ui/primitives/button'
 import {
   Dialog,
@@ -17,10 +25,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from './../../../../../components/ui/primitives/dialog'
+import { Input } from './../../../../../components/ui/primitives/input'
 import { Switch } from './../../../../../components/ui/primitives/switch'
 import useEditor, { selectDefaultBuildingAndLevel } from './../../../../../store/use-editor'
+import useFloorplanMode from './../../../../../store/use-floorplan-mode'
 import { AudioSettingsDialog } from './audio-settings-dialog'
 import { KeyboardShortcutsDialog } from './keyboard-shortcuts-dialog'
+import { LoadBuildDialog, type PendingImport } from './load-build-dialog'
+import { PrintExportButton } from './print-export-button'
 
 type SceneNode = Record<string, unknown> & {
   id?: unknown
@@ -176,15 +188,24 @@ export function SettingsPanel({
   onVisibilityChange,
 }: SettingsPanelProps = {}) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const copyResetTimeoutRef = useRef<number | null>(null)
   const nodes = useScene((state) => state.nodes)
   const rootNodeIds = useScene((state) => state.rootNodeIds)
+  const installedPlugins = useScene((state) => state.installedPlugins)
+  const materials = useScene((state) => state.materials)
   const setScene = useScene((state) => state.setScene)
   const clearScene = useScene((state) => state.clearScene)
   const resetSelection = useViewer((state) => state.resetSelection)
-  const exportScene = useViewer((state) => state.exportScene)
-  const showGrid = useViewer((state) => state.showGrid)
+  const modelExport = useEditor((state) => state.modelExport)
+  const shadows = useViewer((state) => state.shadows)
   const setPhase = useEditor((state) => state.setPhase)
+  const floorplanMode = useFloorplanMode((state) => state.mode)
   const [isGeneratingThumbnail, setIsGeneratingThumbnail] = useState(false)
+  const [exportOnlyVisible, setExportOnlyVisible] = useState(true)
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null)
+  const [projectIdCopyState, setProjectIdCopyState] = useState<'idle' | 'copied' | 'error'>(
+    'idle',
+  )
   const sceneGraphValue = useMemo(
     () => buildSceneGraphValue(nodes as Record<string, SceneNode>, rootNodeIds),
     [nodes, rootNodeIds],
@@ -200,10 +221,22 @@ export function SettingsPanel({
     }
   }, [])
 
+  useEffect(
+    () => () => {
+      if (copyResetTimeoutRef.current !== null) {
+        window.clearTimeout(copyResetTimeoutRef.current)
+      }
+    },
+    [],
+  )
+
   const isLocalProject = false // Props-based; only show cloud sections when projectId provided
 
   const handleSaveBuild = () => {
-    const sceneData = { nodes, rootNodeIds }
+    // Materials ride along: nodes reference them by `scene:<id>` slot
+    // refs, so a save without the table produces a file whose custom
+    // finishes revert to defaults on the very Load Build path below.
+    const sceneData = { nodes, rootNodeIds, installedPlugins, materials }
     const json = JSON.stringify(sceneData, null, 2)
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -221,16 +254,37 @@ export function SettingsPanel({
 
     const reader = new FileReader()
     reader.onload = (event) => {
+      const text = event.target?.result as string
+      let parsed: unknown
       try {
-        const data = JSON.parse(event.target?.result as string)
-        if (data.nodes && data.rootNodeIds) {
-          setScene(data.nodes, data.rootNodeIds)
-          resetSelection()
-          setPhase('site')
-        }
-      } catch (err) {
-        console.error('Failed to load build:', err)
+        parsed = JSON.parse(text)
+      } catch {
+        setPendingImport({
+          fileName: file.name,
+          fileSizeBytes: file.size,
+          result: {
+            ok: false,
+            parsed: null,
+            stats: { total: 0, byType: {}, pluginTypes: {}, unknownTypes: {}, floorAreaM2: 0 },
+            errors: [
+              {
+                severity: 'error',
+                code: 'invalid_json',
+                message: 'File could not be parsed as JSON.',
+              },
+            ],
+            warnings: [],
+            schemaIssues: [],
+            schemaIssueCount: 0,
+          },
+        })
+        return
       }
+      setPendingImport({
+        fileName: file.name,
+        fileSizeBytes: file.size,
+        result: validateBuildJson(parsed),
+      })
     }
     reader.readAsText(file)
 
@@ -238,8 +292,34 @@ export function SettingsPanel({
     e.target.value = ''
   }
 
+  const handleConfirmImport = (parsed: ParsedBuildJson) => {
+    const currentScene = useScene.getState()
+    setScene(
+      parsed.nodes as Parameters<typeof setScene>[0],
+      parsed.rootNodeIds as Parameters<typeof setScene>[1],
+      {
+        // Without this, every `scene:<id>` slot ref in the imported file
+        // pointed at a material that no longer existed — custom finishes
+        // silently reverted to defaults on import.
+        materials: parsed.materials,
+        installedPlugins: parsed.installedPlugins ?? currentScene.installedPlugins,
+        hasExplicitPluginInstallState:
+          parsed.installedPlugins !== undefined || currentScene.hasExplicitPluginInstallState,
+      },
+    )
+    // An import is a scene load: it becomes the undo floor. Without this,
+    // undo could step back into the pre-import scene state.
+    clearSceneHistory()
+    resetSelection()
+    setPhase('site')
+    setPendingImport(null)
+  }
+
   const handleResetToDefault = () => {
     clearScene()
+    // Same floor rule as import — undo after a reset must not resurrect the
+    // old scene (or land on the empty intermediate `unloadScene` state).
+    clearSceneHistory()
     resetSelection()
     setPhase('structure')
     selectDefaultBuildingAndLevel()
@@ -252,6 +332,25 @@ export function SettingsPanel({
     setTimeout(() => setIsGeneratingThumbnail(false), 3000)
   }
 
+  const handleCopyProjectId = async () => {
+    if (!projectId) return
+    if (copyResetTimeoutRef.current !== null) {
+      window.clearTimeout(copyResetTimeoutRef.current)
+    }
+
+    try {
+      await navigator.clipboard.writeText(projectId)
+      setProjectIdCopyState('copied')
+    } catch {
+      setProjectIdCopyState('error')
+    }
+
+    copyResetTimeoutRef.current = window.setTimeout(() => {
+      setProjectIdCopyState('idle')
+      copyResetTimeoutRef.current = null
+    }, 2000)
+  }
+
   const handleVisibilityChange = async (
     field: 'isPrivate' | 'showScansPublic' | 'showGuidesPublic',
     value: boolean,
@@ -261,6 +360,40 @@ export function SettingsPanel({
 
   return (
     <div className="flex flex-col gap-6 p-3">
+      {projectId && (
+        <div className="space-y-2">
+          <label className="font-medium text-muted-foreground text-xs uppercase">Project</label>
+          <div className="font-medium text-sm">Project ID</div>
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="Project ID"
+              className="font-mono text-xs"
+              readOnly
+              value={projectId}
+            />
+            <Button
+              aria-label={projectIdCopyState === 'copied' ? 'Project ID copied' : 'Copy project ID'}
+              className="rounded-full"
+              onClick={() => void handleCopyProjectId()}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {projectIdCopyState === 'copied' ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+              {projectIdCopyState === 'copied'
+                ? 'Copied'
+                : projectIdCopyState === 'error'
+                  ? 'Try again'
+                  : 'Copy'}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Visibility Section (only for cloud projects) */}
       {projectId && !isLocalProject && (
         <div className="space-y-3">
@@ -299,44 +432,82 @@ export function SettingsPanel({
           </div>
           <div className="flex items-center justify-between">
             <div>
-              <div className="font-medium text-sm">Show Grid</div>
-              <div className="text-muted-foreground text-xs">Visible only in the editor</div>
+              <div className="font-medium text-sm">Shadows</div>
+              <div className="text-muted-foreground text-xs">Cast shadows from lights</div>
             </div>
             <Switch
-              checked={showGrid}
-              onCheckedChange={(checked) => useViewer.getState().setShowGrid(checked)}
+              checked={shadows}
+              onCheckedChange={(checked) => useViewer.getState().setShadows(checked)}
             />
           </div>
         </div>
       )}
 
       {/* Export Section */}
-      <div className="space-y-2">
+      <div className="space-y-4">
         <label className="font-medium text-muted-foreground text-xs uppercase">Export</label>
-        <Button
-          className="w-full justify-start gap-2"
-          onClick={() => exportScene?.('glb')}
-          variant="outline"
-        >
-          <Download className="size-4" />
-          Export GLB
-        </Button>
-        <Button
-          className="w-full justify-start gap-2"
-          onClick={() => exportScene?.('stl')}
-          variant="outline"
-        >
-          <Download className="size-4" />
-          Export STL
-        </Button>
-        <Button
-          className="w-full justify-start gap-2"
-          onClick={() => exportScene?.('obj')}
-          variant="outline"
-        >
-          <Download className="size-4" />
-          Export OBJ
-        </Button>
+
+        <div className="space-y-2">
+          <div className="font-medium text-muted-foreground text-xs">3D model</div>
+          <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+            <div>
+              <div className="font-medium text-sm">Visible nodes only</div>
+              <div className="text-muted-foreground text-xs">
+                Exclude hidden furniture and other hidden scene nodes
+              </div>
+            </div>
+            <Switch checked={exportOnlyVisible} onCheckedChange={setExportOnlyVisible} />
+          </div>
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => modelExport?.('glb', { onlyVisible: exportOnlyVisible })}
+            variant="outline"
+          >
+            <Download className="size-4" />
+            Export GLB
+          </Button>
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => modelExport?.('stl', { onlyVisible: exportOnlyVisible })}
+            variant="outline"
+          >
+            <Download className="size-4" />
+            Export STL
+          </Button>
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => modelExport?.('obj', { onlyVisible: exportOnlyVisible })}
+            variant="outline"
+          >
+            <Download className="size-4" />
+            Export OBJ
+          </Button>
+
+          <PrintExportButton onlyVisible={exportOnlyVisible} />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between font-medium text-muted-foreground text-xs">
+            <span>Floor plan</span>
+            <span>{floorplanMode === 'default' ? 'Default mode' : 'Expert mode'}</span>
+          </div>
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => exportFloorplanPdf('full')}
+            variant="outline"
+          >
+            <MapIcon className="size-4" />
+            Full floor plan
+          </Button>
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => exportFloorplanPdf('structure')}
+            variant="outline"
+          >
+            <MapIcon className="size-4" />
+            Structure only
+          </Button>
+        </div>
       </div>
 
       {/* Thumbnail Section (only for cloud projects) */}
@@ -379,6 +550,12 @@ export function SettingsPanel({
           onChange={handleFileLoad}
           ref={fileInputRef}
           type="file"
+        />
+
+        <LoadBuildDialog
+          onCancel={() => setPendingImport(null)}
+          onConfirm={handleConfirmImport}
+          pending={pendingImport}
         />
       </div>
 

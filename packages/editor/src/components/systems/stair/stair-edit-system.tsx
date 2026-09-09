@@ -68,7 +68,7 @@ export const StairEditSystem = () => {
       const segmentsWrapper = group.getObjectByName('segments-wrapper')
       const isActive = activeStairIds.has(stairId)
 
-      if (mergedMesh) mergedMesh.visible = !isActive && !isCurved
+      if (mergedMesh) mergedMesh.visible = !(isActive || isCurved)
       if (segmentsWrapper) segmentsWrapper.visible = isActive && !isCurved
 
       if (stairNode?.children?.length) {
@@ -85,7 +85,7 @@ export const StairEditSystem = () => {
     }
 
     prevActiveStairIds.current = activeStairIds
-  }, [selectedIds, selectedStairSignature])
+  }, [selectedIds])
 
   return null
 }

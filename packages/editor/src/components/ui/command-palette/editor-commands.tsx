@@ -1,7 +1,7 @@
 'use client'
 
 import type { AnyNodeId } from '@pascal-app/core'
-import { LevelNode, useScene } from '@pascal-app/core'
+import { DEFAULT_LEVEL_HEIGHT, LevelNode, useScene } from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import {
   AppWindow,
@@ -22,11 +22,13 @@ import {
   Minimize2,
   Moon,
   MousePointer2,
+  Mountain,
   Package,
   PaintBucket,
   PencilLine,
   Plus,
   Redo2,
+  Sparkles,
   Square,
   SquareStack,
   Sun,
@@ -35,8 +37,8 @@ import {
   Video,
 } from 'lucide-react'
 import { useEffect } from 'react'
+import { getHistoryCommandState, runRedo, runUndo } from '../../../lib/history'
 import { deleteLevelWithFallbackSelection } from '../../../lib/level-selection'
-import { runRedo, runUndo } from '../../../lib/history'
 import { useCommandRegistry } from '../../../store/use-command-registry'
 import type { StructureTool } from '../../../store/use-editor'
 import useEditor from '../../../store/use-editor'
@@ -47,10 +49,9 @@ export function EditorCommands() {
   const { navigateTo, setInputValue, setOpen } = useCommandPalette()
 
   const setPhase = useEditor((s) => s.setPhase)
-  const setMode = useEditor((s) => s.setMode)
-  const setTool = useEditor((s) => s.setTool)
+  const armToolMode = useEditor((s) => s.armToolMode)
+  const armMaterialPaint = useEditor((s) => s.armMaterialPaint)
   const setStructureLayer = useEditor((s) => s.setStructureLayer)
-  const primeMaterialPaintFromSelection = useEditor((s) => s.primeMaterialPaintFromSelection)
   const isPreviewMode = useEditor((s) => s.isPreviewMode)
   const setPreviewMode = useEditor((s) => s.setPreviewMode)
 
@@ -66,9 +67,9 @@ export function EditorCommands() {
     const activateTool = (tool: StructureTool) => {
       run(() => {
         setPhase('structure')
-        setMode('build')
         if (tool === 'zone') setStructureLayer('zones')
-        setTool(tool)
+        else setStructureLayer('elements')
+        armToolMode({ mode: 'build', tool })
       })
     }
 
@@ -161,11 +162,20 @@ export function EditorCommands() {
         shortcut: ['P'],
         execute: () =>
           run(() => {
-            primeMaterialPaintFromSelection()
             setPhase('structure')
             setStructureLayer('elements')
-            setMode('material-paint')
+            armMaterialPaint()
           }),
+      },
+      {
+        id: 'editor.mode.terrain-sculpt',
+        label: 'Sculpt Terrain',
+        group: 'Scene',
+        icon: <Mountain className="h-4 w-4" />,
+        keywords: ['terrain', 'ground', 'elevation', 'sculpt', 'hill', 'slope', 'grade', 'dig'],
+        shortcut: ['G'],
+        // The ToolMode transition moves to the site phase itself.
+        execute: () => run(() => armToolMode({ mode: 'terrain-sculpt' })),
       },
 
       // ── Levels ───────────────────────────────────────────────────────────
@@ -190,8 +200,12 @@ export function EditorCommands() {
             const { nodes } = useScene.getState()
             const building = Object.values(nodes).find((n) => n.type === 'building')
             if (!building) return
+            const levelCount = building.children.filter(
+              (childId) => nodes[childId as keyof typeof nodes]?.type === 'level',
+            ).length
             const newLevel = LevelNode.parse({
-              level: building.children.length,
+              level: levelCount,
+              height: DEFAULT_LEVEL_HEIGHT,
               children: [],
               parentId: building.id,
             })
@@ -241,10 +255,10 @@ export function EditorCommands() {
         label: 'Wall Mode',
         group: 'Viewer Controls',
         icon: <Layers className="h-4 w-4" />,
-        keywords: ['wall', 'cutaway', 'up', 'down', 'view'],
+        keywords: ['wall', 'cutaway', 'up', 'down', 'translucent', 'view'],
         badge: () => {
           const mode = useViewer.getState().wallMode
-          return { cutaway: 'Cutaway', up: 'Up', down: 'Down' }[mode]
+          return { cutaway: 'Cutaway', up: 'Up', down: 'Down', translucent: 'Translucent' }[mode]
         },
         navigate: true,
         execute: () => navigateTo('wall-mode'),
@@ -278,28 +292,31 @@ export function EditorCommands() {
           }),
       },
       {
-        id: 'editor.viewer.theme',
-        label: () => {
-          const theme = useViewer.getState().theme
-          return theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'
-        },
+        id: 'editor.viewer.shading-solid',
+        label: 'Switch to Solid',
         group: 'Viewer Controls',
-        icon: <Sun className="h-4 w-4" />, // icon is static; label conveys the action
-        keywords: ['theme', 'dark', 'light', 'appearance', 'color'],
-        execute: () =>
-          run(() => {
-            const { theme, setTheme } = useViewer.getState()
-            setTheme(theme === 'dark' ? 'light' : 'dark')
-          }),
+        icon: <Box className="h-4 w-4" />,
+        keywords: ['solid', 'shading', 'render', 'mode', 'performance'],
+        execute: () => run(() => useViewer.getState().setShading('solid')),
+      },
+      {
+        id: 'editor.viewer.shading-rendered',
+        label: 'Switch to Rendered',
+        group: 'Viewer Controls',
+        icon: <Sparkles className="h-4 w-4" />,
+        keywords: ['rendered', 'shading', 'render', 'mode', 'quality'],
+        execute: () => run(() => useViewer.getState().setShading('rendered')),
       },
       {
         id: 'editor.viewer.camera-snapshot',
-        label: 'Camera Snapshot',
+        label: 'Take Snapshot',
         group: 'Viewer Controls',
         icon: <Camera className="h-4 w-4" />,
         keywords: ['camera', 'snapshot', 'capture', 'save', 'view', 'bookmark'],
-        navigate: true,
-        execute: () => navigateTo('camera-view'),
+        execute: () => {
+          setOpen(false)
+          useEditor.getState().setCaptureMode(true)
+        },
       },
 
       // ── View ─────────────────────────────────────────────────────────────
@@ -331,6 +348,7 @@ export function EditorCommands() {
         group: 'History',
         icon: <Undo2 className="h-4 w-4" />,
         keywords: ['undo', 'revert', 'back'],
+        when: () => getHistoryCommandState().canUndo,
         execute: () => run(() => runUndo()),
       },
       {
@@ -339,6 +357,7 @@ export function EditorCommands() {
         group: 'History',
         icon: <Redo2 className="h-4 w-4" />,
         keywords: ['redo', 'forward', 'repeat'],
+        when: () => getHistoryCommandState().canRedo,
         execute: () => run(() => runRedo()),
       },
 
@@ -406,8 +425,8 @@ export function EditorCommands() {
     setInputValue,
     setOpen,
     setPhase,
-    setMode,
-    setTool,
+    armToolMode,
+    armMaterialPaint,
     setStructureLayer,
     isPreviewMode,
     setPreviewMode,

@@ -1,28 +1,56 @@
 'use client'
 
 import {
+  type AnyNode,
+  type AnyNodeId,
   type CeilingNode,
+  type ChimneyMaterialRole,
+  type ChimneyNode,
+  type ColumnNode,
+  type DormerSurfaceMaterialRole,
   type FenceNode,
   getCatalogMaterialById,
   getEffectiveRoofSurfaceMaterial,
+  getEffectiveSegmentSurfaceMaterial,
   getEffectiveStairSurfaceMaterial,
-  getEffectiveWallSurfaceMaterial,
   getLibraryMaterialIdFromRef,
   type MaterialSchema,
   type MaterialTarget,
+  nodeRegistry,
   type RoofNode,
+  type RoofSegmentNode,
+  type RoofSegmentSurfaceMaterialRole,
   type RoofSurfaceMaterialRole,
+  type ShelfNode,
   type SlabNode,
   type StairNode,
   type StairSurfaceMaterialRole,
-  type WallNode,
   type WallSurfaceSide,
 } from '@pascal-app/core'
 
-export type PaintableMaterialTarget = Extract<
-  MaterialTarget,
-  'wall' | 'roof' | 'stair' | 'fence' | 'slab' | 'ceiling'
->
+export type PaintableMaterialTarget =
+  | Extract<
+      MaterialTarget,
+      | 'wall'
+      | 'roof'
+      | 'stair'
+      | 'fence'
+      | 'column'
+      | 'slab'
+      | 'ceiling'
+      | 'shelf'
+      | 'cabinet'
+      | 'chimney'
+      | 'dormer'
+      | 'box-vent'
+      | 'ridge-vent'
+      | 'turbine-vent'
+      | 'cupola'
+      | 'eyebrow-vent'
+      | 'gutter'
+      | 'downspout'
+    >
+  | 'item'
 
 export type SingleSurfaceMaterialRole = 'surface'
 
@@ -51,32 +79,6 @@ export function getActivePaintMaterialLabel(material: ActivePaintMaterial | null
   return getCatalogEntryForActivePaintMaterial(material)?.label ?? 'Custom'
 }
 
-export function buildWallSurfaceMaterialPatch(
-  node: WallNode,
-  targetSide: WallSurfaceSide,
-  material: MaterialSchema | undefined,
-  materialPreset: string | undefined,
-): Partial<WallNode> {
-  const nextSurfaceMaterial = { material, materialPreset }
-  const nextInterior =
-    targetSide === 'interior'
-      ? nextSurfaceMaterial
-      : getEffectiveWallSurfaceMaterial(node, 'interior')
-  const nextExterior =
-    targetSide === 'exterior'
-      ? nextSurfaceMaterial
-      : getEffectiveWallSurfaceMaterial(node, 'exterior')
-
-  return {
-    interiorMaterial: nextInterior.material,
-    interiorMaterialPreset: nextInterior.materialPreset,
-    exteriorMaterial: nextExterior.material,
-    exteriorMaterialPreset: nextExterior.materialPreset,
-    material: undefined,
-    materialPreset: undefined,
-  }
-}
-
 export function buildRoofSurfaceMaterialPatch(
   node: RoofNode,
   targetRole: RoofSurfaceMaterialRole,
@@ -101,6 +103,83 @@ export function buildRoofSurfaceMaterialPatch(
     material: undefined,
     materialPreset: undefined,
   }
+}
+
+/**
+ * Build a per-segment paint patch for one of the three surface roles. The
+ * segment ends up with role-specific fields set (and the legacy catch-all
+ * `material` cleared) so subsequent reads pick the role override over any
+ * parent-roof fallback.
+ */
+export function buildRoofSegmentSurfaceMaterialPatch(
+  node: RoofSegmentNode,
+  targetRole: RoofSegmentSurfaceMaterialRole,
+  material: MaterialSchema | undefined,
+  materialPreset: string | undefined,
+): Partial<RoofSegmentNode> {
+  const nextSurfaceMaterial = { material, materialPreset }
+  const nextTop =
+    targetRole === 'top' ? nextSurfaceMaterial : getEffectiveSegmentSurfaceMaterial(node, 'top')
+  const nextEdge =
+    targetRole === 'edge' ? nextSurfaceMaterial : getEffectiveSegmentSurfaceMaterial(node, 'edge')
+  const nextWall =
+    targetRole === 'wall' ? nextSurfaceMaterial : getEffectiveSegmentSurfaceMaterial(node, 'wall')
+
+  return {
+    topMaterial: nextTop.material,
+    topMaterialPreset: nextTop.materialPreset,
+    edgeMaterial: nextEdge.material,
+    edgeMaterialPreset: nextEdge.materialPreset,
+    wallMaterial: nextWall.material,
+    wallMaterialPreset: nextWall.materialPreset,
+    material: undefined,
+    materialPreset: undefined,
+  }
+}
+
+/**
+ * Clear every painted material on a node back to its default. Works for any
+ * kind without per-type knowledge: it nulls the catch-all `material` /
+ * `materialPreset` plus any role field (`*Material` / `*MaterialPreset`) that
+ * the node actually carries. For a roof it also resets every child segment, so
+ * a single call defaults the whole roof system. `updateNode` merges patches
+ * shallowly without re-validation, so the `undefined` values land as cleared
+ * fields and the renderer falls back to the theme defaults.
+ */
+export function buildResetSurfaceMaterialUpdates(
+  nodes: Record<string, AnyNode>,
+  node: AnyNode,
+): { id: AnyNodeId; data: Partial<AnyNode> }[] {
+  const clearPatch = (target: AnyNode): Partial<AnyNode> => {
+    const patch: Record<string, undefined> = {}
+    for (const key of Object.keys(target)) {
+      if (
+        key === 'material' ||
+        key === 'materialPreset' ||
+        key === 'slots' ||
+        key.endsWith('Material') ||
+        key.endsWith('MaterialPreset')
+      ) {
+        patch[key] = undefined
+      }
+    }
+    return patch as Partial<AnyNode>
+  }
+
+  const updates: { id: AnyNodeId; data: Partial<AnyNode> }[] = [
+    { id: node.id as AnyNodeId, data: clearPatch(node) },
+  ]
+
+  if (node.type === 'roof') {
+    for (const segmentId of (node as RoofNode).children ?? []) {
+      const segment = nodes[segmentId as AnyNodeId]
+      if (segment?.type === 'roof-segment') {
+        updates.push({ id: segment.id as AnyNodeId, data: clearPatch(segment) })
+      }
+    }
+  }
+
+  return updates
 }
 
 export function buildStairSurfaceMaterialPatch(
@@ -131,14 +210,36 @@ export function buildStairSurfaceMaterialPatch(
   }
 }
 
-export function buildSingleSurfaceMaterialPatch<TNode extends FenceNode | SlabNode | CeilingNode>(
-  material: MaterialSchema | undefined,
-  materialPreset: string | undefined,
-): Partial<TNode> {
+export function buildSingleSurfaceMaterialPatch<
+  TNode extends FenceNode | ColumnNode | SlabNode | CeilingNode | ShelfNode,
+>(material: MaterialSchema | undefined, materialPreset: string | undefined): Partial<TNode> {
   return {
     material,
     materialPreset,
   } as Partial<TNode>
+}
+
+// Chimney / dormer patch builders moved to
+// `@pascal-app/nodes/<kind>/paint.ts` and are wired into the kind's
+// `capabilities.paint.buildPatch`. The selection-manager invokes them
+// through the registry; no editor-side helper needed here.
+//
+// `getEffectiveChimneyMaterial` below stays because
+// `resolveActivePaintMaterialFromSelection` (also in this file) still
+// has wall / roof / stair arms that follow the same shape — they all
+// migrate together in a follow-up.
+
+export function getEffectiveChimneyMaterial(
+  node: ChimneyNode,
+  role: ChimneyMaterialRole,
+): { material: MaterialSchema | undefined; materialPreset: string | undefined } {
+  if (role === 'top') {
+    const hasTop = node.topMaterial !== undefined || node.topMaterialPreset !== undefined
+    if (hasTop) {
+      return { material: node.topMaterial, materialPreset: node.topMaterialPreset }
+    }
+  }
+  return { material: node.material, materialPreset: node.materialPreset }
 }
 
 export function resolveActivePaintMaterialFromSelection(params: {
@@ -150,32 +251,44 @@ export function resolveActivePaintMaterialFromSelection(params: {
       | WallSurfaceSide
       | StairSurfaceMaterialRole
       | RoofSurfaceMaterialRole
+      | ChimneyMaterialRole
+      | DormerSurfaceMaterialRole
       | SingleSurfaceMaterialRole
+      | string
   } | null
 }): ActivePaintMaterial | null {
   const { nodes, selectedId, selectedMaterialTarget } = params
-  if (!selectedId || !selectedMaterialTarget || selectedMaterialTarget.nodeId !== selectedId)
+  if (!(selectedId && selectedMaterialTarget) || selectedMaterialTarget.nodeId !== selectedId)
     return null
 
   const selectedNode = nodes[selectedId]
   if (!selectedNode) return null
 
-  if (
-    selectedNode.type === 'wall' &&
-    (selectedMaterialTarget.role === 'interior' || selectedMaterialTarget.role === 'exterior')
-  ) {
-    const surface = getEffectiveWallSurfaceMaterial(selectedNode, selectedMaterialTarget.role)
-    return hasActivePaintMaterial({
-      material: surface.material,
-      materialPreset: surface.materialPreset,
-      sourceTarget: 'wall',
+  // Registry-driven path. Kinds that declare
+  // `capabilities.paint.getEffectiveMaterial` resolve their effective
+  // material here without an editor-side per-kind arm. Wall,
+  // chimney, dormer use this; roof / stair stay legacy below.
+  const paintCap = nodeRegistry.get(selectedNode.type)?.capabilities?.paint
+  if (paintCap?.getEffectiveMaterial) {
+    const surface = paintCap.getEffectiveMaterial({
+      node: selectedNode,
+      role: selectedMaterialTarget.role as string,
+      nodes,
     })
+    if (surface) {
+      const sourceTarget = (paintCap.materialTarget ?? selectedNode.type) as PaintableMaterialTarget
+      return hasActivePaintMaterial({
+        material: surface.material,
+        materialPreset: surface.materialPreset,
+        sourceTarget,
+      })
         ? {
-          material: surface.material,
-          materialPreset: surface.materialPreset,
-          sourceTarget: 'wall',
-        }
-      : null
+            material: surface.material,
+            materialPreset: surface.materialPreset,
+            sourceTarget,
+          }
+        : null
+    }
   }
 
   if (
@@ -184,13 +297,33 @@ export function resolveActivePaintMaterialFromSelection(params: {
       selectedMaterialTarget.role === 'edge' ||
       selectedMaterialTarget.role === 'wall')
   ) {
-    const surface = getEffectiveRoofSurfaceMaterial(selectedNode, selectedMaterialTarget.role)
+    let surface = getEffectiveRoofSurfaceMaterial(selectedNode, selectedMaterialTarget.role)
+    if (
+      selectedMaterialTarget.role === 'top' &&
+      surface.material === undefined &&
+      surface.materialPreset === undefined
+    ) {
+      const roofNode = selectedNode as RoofNode
+      const fallbackSegment = (roofNode.children ?? [])
+        .map((id: AnyNodeId) => nodes[id as AnyNodeId] as RoofSegmentNode | undefined)
+        .find(
+          (segment: RoofSegmentNode | undefined) =>
+            segment?.type === 'roof-segment' &&
+            (segment.material !== undefined || segment.materialPreset !== undefined),
+        )
+      if (fallbackSegment) {
+        surface = {
+          material: fallbackSegment.material,
+          materialPreset: fallbackSegment.materialPreset,
+        }
+      }
+    }
     return hasActivePaintMaterial({
       material: surface.material,
       materialPreset: surface.materialPreset,
       sourceTarget: 'roof',
     })
-        ? {
+      ? {
           material: surface.material,
           materialPreset: surface.materialPreset,
           sourceTarget: 'roof',
@@ -210,7 +343,7 @@ export function resolveActivePaintMaterialFromSelection(params: {
       materialPreset: surface.materialPreset,
       sourceTarget: 'stair',
     })
-        ? {
+      ? {
           material: surface.material,
           materialPreset: surface.materialPreset,
           sourceTarget: 'stair',
@@ -218,12 +351,21 @@ export function resolveActivePaintMaterialFromSelection(params: {
       : null
   }
 
+  // Wall / chimney / dormer flow through the registry-driven path
+  // at the top of this function.
+
+  // Slot-backed kinds resolve via the registry-driven `getEffectiveMaterial`
+  // path at the top of this function, including legacy inline-material
+  // fallbacks when their capability exposes one.
+
   if (
     (selectedNode.type === 'fence' ||
-      selectedNode.type === 'slab' ||
-      selectedNode.type === 'ceiling') &&
+      selectedNode.type === 'column' ||
+      selectedNode.type === 'shelf') &&
     selectedMaterialTarget.role === 'surface'
   ) {
+    // Roof vents previously lived here too; they now resolve via the
+    // registry-driven `getEffectiveMaterial` path at the top of this function.
     const target = selectedNode.type
     return hasActivePaintMaterial({
       material: selectedNode.material,
@@ -251,6 +393,10 @@ export function resolvePaintTargetFromSelection(params: {
   const selectedNode = nodes[selectedId]
   if (!selectedNode) return null
 
+  const registryPaintTarget = nodeRegistry.get(selectedNode.type)?.capabilities?.paint
+    ?.materialTarget
+  if (registryPaintTarget) return registryPaintTarget as PaintableMaterialTarget
+
   if (selectedNode.type === 'wall') {
     return 'wall'
   }
@@ -267,12 +413,52 @@ export function resolvePaintTargetFromSelection(params: {
     return 'fence'
   }
 
+  if (selectedNode.type === 'column') {
+    return 'column'
+  }
+
   if (selectedNode.type === 'slab') {
     return 'slab'
   }
 
   if (selectedNode.type === 'ceiling') {
     return 'ceiling'
+  }
+
+  if (selectedNode.type === 'shelf') {
+    return 'shelf'
+  }
+
+  if (selectedNode.type === 'item') {
+    return 'item'
+  }
+
+  if (selectedNode.type === 'chimney') {
+    return 'chimney'
+  }
+
+  if (selectedNode.type === 'dormer') {
+    return 'dormer'
+  }
+
+  if (selectedNode.type === 'box-vent') {
+    return 'box-vent'
+  }
+
+  if (selectedNode.type === 'ridge-vent') {
+    return 'ridge-vent'
+  }
+
+  if (selectedNode.type === 'turbine-vent') {
+    return 'turbine-vent'
+  }
+
+  if (selectedNode.type === 'cupola') {
+    return 'cupola'
+  }
+
+  if (selectedNode.type === 'eyebrow-vent') {
+    return 'eyebrow-vent'
   }
 
   return null

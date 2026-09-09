@@ -38,12 +38,12 @@ export const FenceTreeNode = memo(function FenceTreeNode({
 
   return (
     <TreeNodeWrapper
-      actions={<TreeNodeActions node={node} />}
+      actions={<TreeNodeActions nodeId={node.id} />}
       depth={depth}
       expanded={false}
       hasChildren={false}
       icon={
-        <Image alt="" className="object-contain" height={14} src="/icons/fence.png" width={14} />
+        <Image alt="" className="object-contain" height={14} src="/icons/fence.webp" width={14} />
       }
       isHovered={isHovered}
       isLast={isLast}
@@ -53,7 +53,7 @@ export const FenceTreeNode = memo(function FenceTreeNode({
         <InlineRenameInput
           defaultName="Fence"
           isEditing={isEditing}
-          node={node}
+          nodeId={node.id}
           onStartEditing={() => setIsEditing(true)}
           onStopEditing={() => setIsEditing(false)}
         />

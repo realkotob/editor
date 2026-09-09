@@ -1,7 +1,8 @@
 import dedent from 'dedent'
 import { z } from 'zod'
 import { BaseNode, nodeType, objectId } from '../base'
-import { type MaterialSchema, MaterialSchema as MaterialSchemaSchema } from '../material'
+import type { MaterialSchema as MaterialSchemaType } from '../material'
+import { MaterialSchema } from '../material'
 import { StairSegmentNode } from './stair-segment'
 
 export const StairRailingMode = z.enum(['none', 'left', 'right', 'both'])
@@ -15,31 +16,40 @@ export type StairTopLandingMode = z.infer<typeof StairTopLandingMode>
 export type StairSlabOpeningMode = z.infer<typeof StairSlabOpeningMode>
 export type StairSurfaceMaterialRole = 'railing' | 'tread' | 'side'
 export type StairSurfaceMaterialSpec = {
-  material?: MaterialSchema
+  material?: MaterialSchemaType
   materialPreset?: string
 }
 
 export const StairNode = BaseNode.extend({
   id: objectId('stair'),
   type: nodeType('stair'),
-  material: MaterialSchemaSchema.optional(),
+  material: MaterialSchema.optional(),
   materialPreset: z.string().optional(),
-  railingMaterial: MaterialSchemaSchema.optional(),
+  railingMaterial: MaterialSchema.optional(),
   railingMaterialPreset: z.string().optional(),
-  treadMaterial: MaterialSchemaSchema.optional(),
+  treadMaterial: MaterialSchema.optional(),
   treadMaterialPreset: z.string().optional(),
-  sideMaterial: MaterialSchemaSchema.optional(),
+  sideMaterial: MaterialSchema.optional(),
   sideMaterialPreset: z.string().optional(),
+  // Unified paint-slot refs (`scene:`/`library:` MaterialRef per slot id),
+  // matching the slot model items/slab/shelf use. Absent = declared default.
+  slots: z.record(z.string(), z.string()).optional(),
   position: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   // Rotation around Y axis in radians
   rotation: z.number().default(0),
+  // Persisted slab-support host — see ItemNode.supportSlabId for the rules.
+  supportSlabId: z.string().optional(),
   stairType: StairType.default('straight'),
   fromLevelId: z.string().nullable().default(null),
   toLevelId: z.string().nullable().default(null),
+  // Destination deck (a slab id). When set, the stair's rise follows that
+  // slab's elevation live. An explicit `totalRise` still wins when BOTH are
+  // set (edge case — the panel clears the custom rise when attaching).
+  deckSlabId: z.string().optional(),
   slabOpeningMode: StairSlabOpeningMode.default('none'),
   openingOffset: z.number().default(0),
   width: z.number().default(1.0),
-  totalRise: z.number().default(2.5),
+  totalRise: z.number().optional(),
   stepCount: z.number().default(10),
   thickness: z.number().default(0.25),
   fillToFloor: z.boolean().default(true),
@@ -62,6 +72,7 @@ export const StairNode = BaseNode.extend({
   - rotation: rotation around Y axis
   - stairType: straight (segment-based), curved (arc-based), or spiral
   - fromLevelId / toLevelId: source and destination levels used for auto slab cutouts
+  - deckSlabId: destination deck (slab) — the rise derives from its elevation while set
   - slabOpeningMode: whether a destination-level slab opening is generated for this stair
   - openingOffset: extra opening expansion applied after the cutout polygon is computed
   - width: stair width
@@ -126,18 +137,26 @@ export function getEffectiveStairSurfaceMaterial(
 
   const treadFallback = {
     material: node.treadMaterial,
-    materialPreset: typeof node.treadMaterialPreset === 'string' ? node.treadMaterialPreset : undefined,
+    materialPreset:
+      typeof node.treadMaterialPreset === 'string' ? node.treadMaterialPreset : undefined,
   }
   const sideFallback = {
     material: node.sideMaterial,
-    materialPreset: typeof node.sideMaterialPreset === 'string' ? node.sideMaterialPreset : undefined,
+    materialPreset:
+      typeof node.sideMaterialPreset === 'string' ? node.sideMaterialPreset : undefined,
   }
 
-  if (role === 'tread' && (sideFallback.material !== undefined || sideFallback.materialPreset !== undefined)) {
+  if (
+    role === 'tread' &&
+    (sideFallback.material !== undefined || sideFallback.materialPreset !== undefined)
+  ) {
     return sideFallback
   }
 
-  if (role === 'side' && (treadFallback.material !== undefined || treadFallback.materialPreset !== undefined)) {
+  if (
+    role === 'side' &&
+    (treadFallback.material !== undefined || treadFallback.materialPreset !== undefined)
+  ) {
     return treadFallback
   }
 

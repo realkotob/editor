@@ -1,4 +1,4 @@
-import { type AnyNodeId, type BuildingNode, LevelNode, useScene } from '@pascal-app/core'
+import { type BuildingNode, DEFAULT_LEVEL_HEIGHT, LevelNode, useScene } from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import { Building2, Plus } from 'lucide-react'
 import { memo, useState } from 'react'
@@ -12,7 +12,7 @@ import { focusTreeNode, TreeNode, TreeNodeWrapper } from './tree-node'
 import { TreeNodeActions } from './tree-node-actions'
 
 interface BuildingTreeNodeProps {
-  nodeId: AnyNodeId
+  nodeId: BuildingNode['id']
   depth: number
   isLast?: boolean
 }
@@ -39,8 +39,11 @@ export const BuildingTreeNode = memo(function BuildingTreeNode({
 
   const handleAddLevel = (e: React.MouseEvent) => {
     e.stopPropagation()
+    const nodes = useScene.getState().nodes
+    const levelCount = children.filter((childId) => nodes[childId]?.type === 'level').length
     const newLevel = LevelNode.parse({
-      level: children.length,
+      level: levelCount,
+      height: DEFAULT_LEVEL_HEIGHT,
       children: [],
       parentId: nodeId,
     })

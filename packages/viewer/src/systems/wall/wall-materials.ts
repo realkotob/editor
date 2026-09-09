@@ -1,18 +1,38 @@
 import {
-  baseMaterial,
   getEffectiveWallSurfaceMaterial,
   getMaterialPresetByRef,
   getWallSurfaceMaterialSignature,
+  getWallSurfaceSideFromBandSlot,
+  parseMaterialRef,
   resolveMaterial,
+  type SceneMaterial,
+  type SceneMaterialId,
+  WALL_SLOT_DEFAULT,
+  WALL_SURFACE_SLOT_DEFAULTS,
   type WallNode,
   type WallSurfaceMaterialSpec,
+  type WallSurfaceSide,
+  type WallSurfaceSlotId,
 } from '@pascal-app/core'
 import { Color, type Material } from 'three'
 import { Fn, float, fract, length, mix, positionLocal, smoothstep, step, vec2 } from 'three/tsl'
-import { MeshStandardNodeMaterial } from 'three/webgpu'
-import { createMaterial, createMaterialFromPresetRef } from '../../lib/materials'
+import { MeshLambertNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
+import {
+  baseMaterial,
+  type ColorPreset,
+  createDefaultMaterial,
+  createMaterial,
+  createMaterialFromPresetRef,
+  createSurfaceRoleMaterial,
+  materialPresetRefSignature,
+  type RenderShading,
+  resolveMaterialRef,
+  resolveSurfaceColor,
+} from '../../lib/materials'
 
-const DEFAULT_WALL_COLOR = '#f2f0ed'
+type SceneMaterials = Record<SceneMaterialId, SceneMaterial> | undefined
+
+const DEFAULT_WALL_COLOR = '#e9e7e3'
 
 const WALL_HIGHLIGHT_PROFILES = {
   delete: {
@@ -21,25 +41,19 @@ const WALL_HIGHLIGHT_PROFILES = {
     emissiveBlend: 0.92,
     emissiveIntensity: 0.46,
   },
-  selection: {
-    color: new Color('#818cf8'),
-    blend: 0.32,
-    emissiveBlend: 0.7,
-    emissiveIntensity: 0.42,
-  },
 } as const
 
 type WallHighlightKind = keyof typeof WALL_HIGHLIGHT_PROFILES
 
-export type WallMaterialArray = [Material, Material, Material]
+export type WallMaterialArray = Material[]
 
 export interface WallMaterials {
   visible: WallMaterialArray
   invisible: WallMaterialArray
+  translucent: WallMaterialArray
   deleteVisible: WallMaterialArray
   deleteInvisible: WallMaterialArray
-  highlightedVisible: WallMaterialArray
-  highlightedInvisible: WallMaterialArray
+  deleteTranslucent: WallMaterialArray
   materialHash: string
 }
 
@@ -62,16 +76,171 @@ const dotPattern = Fn(() => {
   return dots.mul(yFade)
 })
 
-function getSurfaceVisibleMaterial(spec: WallSurfaceMaterialSpec): Material {
+function getSurfaceVisibleMaterial(
+  spec: WallSurfaceMaterialSpec,
+  shading: RenderShading,
+): Material {
   if (spec.materialPreset) {
-    return createMaterialFromPresetRef(spec.materialPreset) ?? baseMaterial
+    return createMaterialFromPresetRef(spec.materialPreset, shading) ?? baseMaterial(shading)
   }
 
   if (spec.material) {
-    return createMaterial(spec.material)
+    return createMaterial(spec.material, shading)
   }
 
-  return baseMaterial
+  return baseMaterial(shading)
+}
+
+function hasExplicitMaterial(spec: WallSurfaceMaterialSpec): boolean {
+  return Boolean(spec.materialPreset || spec.material)
+}
+
+// Resolve a wall face's declared default — a catalog `library:` finish or a
+// flat colour — to a renderable material.
+function resolveWallSlotDefault(slotDefault: string, shading: RenderShading): Material {
+  if (parseMaterialRef(slotDefault)?.kind === 'library') {
+    return createMaterialFromPresetRef(slotDefault, shading) ?? baseMaterial(shading)
+  }
+  return createDefaultMaterial(slotDefault, 0.9, shading)
+}
+
+// Slot-first resolution for one wall face, matching every other paintable kind:
+//   node.slots[side] ref → legacy inline fields → declared slot default.
+// A dangling `scene:` ref (material deleted / copied across scenes) falls back
+// to the declared default — it never blocks rendering (the dangling-ref rule).
+function resolveWallFaceMaterial(
+  wallNode: WallNode,
+  side: WallSurfaceSide,
+  shading: RenderShading,
+  sceneMaterials: SceneMaterials,
+): Material {
+  const ref = wallNode.slots?.[side]
+  if (ref) {
+    return (
+      resolveMaterialRef(ref, sceneMaterials, shading) ??
+      resolveWallSlotDefault(WALL_SLOT_DEFAULT[side], shading)
+    )
+  }
+
+  const spec = getEffectiveWallSurfaceMaterial(wallNode, side)
+  if (hasExplicitMaterial(spec)) {
+    return getSurfaceVisibleMaterial(spec, shading)
+  }
+
+  return resolveWallSlotDefault(WALL_SLOT_DEFAULT[side], shading)
+}
+
+function resolveWallSlotMaterial(
+  wallNode: WallNode,
+  slotId: WallSurfaceSlotId,
+  shading: RenderShading,
+  sceneMaterials: SceneMaterials,
+): Material {
+  const ref = wallNode.slots?.[slotId]
+  if (ref) {
+    return (
+      resolveMaterialRef(ref, sceneMaterials, shading) ??
+      resolveWallSlotDefault(WALL_SURFACE_SLOT_DEFAULTS[slotId], shading)
+    )
+  }
+
+  const side = getWallSurfaceSideFromBandSlot(slotId)
+  if (side) {
+    return resolveWallFaceMaterial(wallNode, side, shading, sceneMaterials)
+  }
+
+  return resolveWallSlotDefault(WALL_SURFACE_SLOT_DEFAULTS[slotId], shading)
+}
+
+// Cache-key fragment for one face: the slot ref plus, for a `scene:` ref, the
+// referenced material's *content* — so editing a scene material assigned to a
+// wall invalidates the cache. A `library:` ref carries its resolution state
+// instead: AI-generated materials register asynchronously, and a dangling ref
+// resolved to the slot default must not stay cached once the library lands.
+// Falls back to the legacy signature when unmigrated.
+function wallFaceMaterialSignature(
+  wallNode: WallNode,
+  side: WallSurfaceSide,
+  sceneMaterials: SceneMaterials,
+): string {
+  const ref = wallNode.slots?.[side]
+  if (ref) {
+    const parsed = parseMaterialRef(ref)
+    if (parsed?.kind === 'scene') {
+      return JSON.stringify({
+        ref,
+        material: sceneMaterials?.[parsed.id as SceneMaterialId]?.material ?? null,
+      })
+    }
+    return JSON.stringify({ ref: materialPresetRefSignature(ref) })
+  }
+  return getWallSurfaceMaterialSignature(getEffectiveWallSurfaceMaterial(wallNode, side))
+}
+
+function wallSlotMaterialSignature(
+  wallNode: WallNode,
+  slotId: WallSurfaceSlotId,
+  sceneMaterials: SceneMaterials,
+): string {
+  const ref = wallNode.slots?.[slotId]
+  if (ref) {
+    const parsed = parseMaterialRef(ref)
+    if (parsed?.kind === 'scene') {
+      return JSON.stringify({
+        ref,
+        material: sceneMaterials?.[parsed.id as SceneMaterialId]?.material ?? null,
+      })
+    }
+    return JSON.stringify({ ref: materialPresetRefSignature(ref) })
+  }
+
+  const side = getWallSurfaceSideFromBandSlot(slotId)
+  if (side) return wallFaceMaterialSignature(wallNode, side, sceneMaterials)
+  return JSON.stringify({ default: WALL_SURFACE_SLOT_DEFAULTS[slotId] })
+}
+
+// Slot-first tint for the cutaway/invisible wall variant.
+function resolveWallFaceColor(
+  wallNode: WallNode,
+  side: WallSurfaceSide,
+  sceneMaterials: SceneMaterials,
+  fallback: string,
+): string {
+  const ref = wallNode.slots?.[side]
+  if (ref) {
+    const parsed = parseMaterialRef(ref)
+    if (parsed?.kind === 'library') {
+      return getMaterialPresetByRef(ref)?.mapProperties?.color ?? fallback
+    }
+    if (parsed?.kind === 'scene') {
+      const sceneMaterial = sceneMaterials?.[parsed.id as SceneMaterialId]
+      return sceneMaterial ? resolveMaterial(sceneMaterial.material).color : fallback
+    }
+    return fallback
+  }
+  return getSurfaceColor(getEffectiveWallSurfaceMaterial(wallNode, side), fallback)
+}
+
+function resolveWallSlotColor(
+  wallNode: WallNode,
+  slotId: WallSurfaceSlotId,
+  sceneMaterials: SceneMaterials,
+  fallback: string,
+): string {
+  const ref = wallNode.slots?.[slotId]
+  if (ref) {
+    const parsed = parseMaterialRef(ref)
+    if (parsed?.kind === 'library') {
+      return getMaterialPresetByRef(ref)?.mapProperties?.color ?? fallback
+    }
+    if (parsed?.kind === 'scene') {
+      const sceneMaterial = sceneMaterials?.[parsed.id as SceneMaterialId]
+      return sceneMaterial ? resolveMaterial(sceneMaterial.material).color : fallback
+    }
+  }
+
+  const side = getWallSurfaceSideFromBandSlot(slotId)
+  return side ? resolveWallFaceColor(wallNode, side, sceneMaterials, fallback) : fallback
 }
 
 function getSurfaceColor(spec: WallSurfaceMaterialSpec, fallback = DEFAULT_WALL_COLOR): string {
@@ -120,14 +289,140 @@ function createHighlightedWallMaterial(material: Material, kind: WallHighlightKi
   return highlightedMaterial
 }
 
-function createInvisibleWallMaterial(color: string): MeshStandardNodeMaterial {
-  return new MeshStandardNodeMaterial({
-    transparent: true,
-    opacityNode: mix(float(0.0), float(0.24), dotPattern()),
-    color,
-    depthWrite: false,
-    emissive: color,
-  })
+// Light selection highlight for walls (walls are excluded from the generic
+// editor selection highlight, so they need their own). Adds a gentle indigo
+// emissive (no albedo tint) so the real material/texture stays readable with a
+// soft "selected" glow. Two NodeMaterial-clone gotchas are handled:
+//   1. `clone()` on the WebGPU backend drops the texture-map nodes → re-attach
+//      them from the source (shared by reference).
+//   2. The wall's finish texture loads async, so an early clone has no map yet →
+//      cache keyed by the source `.map` and rebuild when it changes (self-heals
+//      once the texture lands).
+const SELECTION_HIGHLIGHT_COLOR = new Color('#818cf8')
+const SELECTION_EMISSIVE_BLEND = 0.4
+const SELECTION_EMISSIVE_INTENSITY = 0.12
+
+// Softer sibling of the selection glow, for HOVERING a hidden wall (the
+// X-ray nearest-first selection made hidden walls hover targets; without a
+// material affordance the only thing lighting up was the furniture behind
+// them). Same indigo so hover reads as "this will select", weaker so a
+// hovered-then-selected wall still steps up on click.
+const HOVER_EMISSIVE_BLEND = 0.4
+const HOVER_EMISSIVE_INTENSITY = 0.2
+
+const SELECTION_TEXTURE_MAP_KEYS = [
+  'map',
+  'normalMap',
+  'roughnessMap',
+  'metalnessMap',
+  'aoMap',
+  'emissiveMap',
+  'bumpMap',
+  'displacementMap',
+  'alphaMap',
+  'lightMap',
+] as const
+
+const selectionHighlightCache = new WeakMap<Material, { clone: Material; map: unknown }>()
+const hoverHighlightCache = new WeakMap<Material, { clone: Material; map: unknown }>()
+
+function getEmissiveHighlightMaterial(
+  base: Material,
+  cache: WeakMap<Material, { clone: Material; map: unknown }>,
+  emissiveBlend: number,
+  emissiveIntensity: number,
+): Material {
+  const baseMap = (base as { map?: unknown }).map ?? null
+  const cached = cache.get(base)
+  if (cached && cached.map === baseMap) return cached.clone
+
+  const clone = base.clone() as Material & {
+    emissive?: Color
+    emissiveIntensity?: number
+    needsUpdate?: boolean
+  }
+  // Re-attach texture maps the WebGPU NodeMaterial clone drops.
+  const src = base as unknown as Record<string, unknown>
+  const dst = clone as unknown as Record<string, unknown>
+  for (const key of SELECTION_TEXTURE_MAP_KEYS) {
+    if (src[key]) dst[key] = src[key]
+  }
+  if ('emissive' in clone && clone.emissive) {
+    clone.emissive = clone.emissive.clone().lerp(SELECTION_HIGHLIGHT_COLOR, emissiveBlend)
+  }
+  if ('emissiveIntensity' in clone) {
+    clone.emissiveIntensity = Math.max(clone.emissiveIntensity ?? 0, emissiveIntensity)
+  }
+  clone.needsUpdate = true
+  cache.set(base, { clone, map: baseMap })
+  return clone
+}
+
+/** Lazy light-emissive selection variant of a wall's material array (keeps texture). */
+export function getSelectionHighlightMaterials(materials: WallMaterialArray): WallMaterialArray {
+  return materials.map((material) =>
+    getEmissiveHighlightMaterial(
+      material,
+      selectionHighlightCache,
+      SELECTION_EMISSIVE_BLEND,
+      SELECTION_EMISSIVE_INTENSITY,
+    ),
+  ) as WallMaterialArray
+}
+
+/**
+ * Softer hover sibling of the selection variant — the affordance for a
+ * hovered HIDDEN wall (`WallCutout` applies it to the invisible stipple
+ * film so the wall the click would select reads under the cursor).
+ */
+export function getHoverHighlightMaterials(materials: WallMaterialArray): WallMaterialArray {
+  return materials.map((material) =>
+    getEmissiveHighlightMaterial(
+      material,
+      hoverHighlightCache,
+      HOVER_EMISSIVE_BLEND,
+      HOVER_EMISSIVE_INTENSITY,
+    ),
+  ) as WallMaterialArray
+}
+
+function createInvisibleWallMaterial(color: string, shading: RenderShading): Material {
+  const material =
+    shading === 'solid'
+      ? new MeshLambertNodeMaterial({
+          transparent: true,
+          color,
+          depthWrite: false,
+          emissive: color,
+        })
+      : new MeshStandardNodeMaterial({
+          transparent: true,
+          color,
+          depthWrite: false,
+          emissive: color,
+        })
+
+  material.opacityNode = mix(float(0.0), float(0.24), dotPattern())
+  return material
+}
+
+function createTranslucentWallMaterial(color: string, shading: RenderShading): Material {
+  const material =
+    shading === 'solid'
+      ? new MeshLambertNodeMaterial({
+          transparent: true,
+          color,
+          opacity: 0.35,
+          depthWrite: false,
+        })
+      : new MeshStandardNodeMaterial({
+          transparent: true,
+          color,
+          opacity: 0.35,
+          depthWrite: false,
+        })
+
+  return material
 }
 
 function mapWallMaterialArray(
@@ -149,20 +444,38 @@ function disposeOwnedMaterials(materials: WallMaterialArray[]) {
   })
 }
 
-export function getWallMaterialHash(wallNode: WallNode): string {
+export function getWallMaterialHash(
+  wallNode: WallNode,
+  shading: RenderShading,
+  sceneMaterials?: SceneMaterials,
+): string {
   return JSON.stringify({
-    interior: getWallSurfaceMaterialSignature(
-      getEffectiveWallSurfaceMaterial(wallNode, 'interior'),
-    ),
-    exterior: getWallSurfaceMaterialSignature(
-      getEffectiveWallSurfaceMaterial(wallNode, 'exterior'),
-    ),
+    shading,
+    interior: wallFaceMaterialSignature(wallNode, 'interior', sceneMaterials),
+    exterior: wallFaceMaterialSignature(wallNode, 'exterior', sceneMaterials),
+    lowerInterior: wallSlotMaterialSignature(wallNode, 'lowerInterior', sceneMaterials),
+    middleInterior: wallSlotMaterialSignature(wallNode, 'middleInterior', sceneMaterials),
+    upperInterior: wallSlotMaterialSignature(wallNode, 'upperInterior', sceneMaterials),
+    topInterior: wallSlotMaterialSignature(wallNode, 'topInterior', sceneMaterials),
+    lowerExterior: wallSlotMaterialSignature(wallNode, 'lowerExterior', sceneMaterials),
+    middleExterior: wallSlotMaterialSignature(wallNode, 'middleExterior', sceneMaterials),
+    upperExterior: wallSlotMaterialSignature(wallNode, 'upperExterior', sceneMaterials),
+    topExterior: wallSlotMaterialSignature(wallNode, 'topExterior', sceneMaterials),
   })
 }
 
-export function getMaterialsForWall(wallNode: WallNode): WallMaterials {
-  const cacheKey = wallNode.id
-  const materialHash = getWallMaterialHash(wallNode)
+export function getMaterialsForWall(
+  wallNode: WallNode,
+  shading: RenderShading = 'rendered',
+  textures = true,
+  colorPreset: ColorPreset = 'clay',
+  sceneTheme?: string,
+  sceneMaterials?: SceneMaterials,
+): WallMaterials {
+  const cacheKey = `${wallNode.id}-${shading}-${textures}-${colorPreset}-${sceneTheme ?? 'base'}`
+  const materialHash = textures
+    ? getWallMaterialHash(wallNode, shading, sceneMaterials)
+    : JSON.stringify({ textures, colorPreset, sceneTheme })
 
   const existing = wallMaterialCache.get(cacheKey)
   if (existing && existing.materialHash === materialHash) {
@@ -172,48 +485,115 @@ export function getMaterialsForWall(wallNode: WallNode): WallMaterials {
   if (existing) {
     disposeOwnedMaterials([
       existing.invisible,
+      existing.translucent,
       existing.deleteVisible,
       existing.deleteInvisible,
-      existing.highlightedVisible,
-      existing.highlightedInvisible,
+      existing.deleteTranslucent,
     ])
   }
 
-  const interiorSpec = getEffectiveWallSurfaceMaterial(wallNode, 'interior')
-  const exteriorSpec = getEffectiveWallSurfaceMaterial(wallNode, 'exterior')
+  const wallRoleMaterial = createSurfaceRoleMaterial('wall', colorPreset, undefined, sceneTheme)
 
-  const visible: WallMaterialArray = [
-    baseMaterial,
-    getSurfaceVisibleMaterial(interiorSpec),
-    getSurfaceVisibleMaterial(exteriorSpec),
-  ]
+  // Colored mode: each face resolves slot-first (node.slots ref → legacy inline
+  // fields → declared slot default, parity with the retired DEFAULT_WALL_MATERIAL).
+  // Textures-off collapses every face to the themed wall role (the guaranteed
+  // escape hatch). The edge/cap slot (index 0) stays role-based.
+  const visible: WallMaterialArray = textures
+    ? [
+        wallRoleMaterial,
+        resolveWallFaceMaterial(wallNode, 'interior', shading, sceneMaterials),
+        resolveWallFaceMaterial(wallNode, 'exterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'lowerInterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'middleInterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'upperInterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'topInterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'lowerExterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'middleExterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'upperExterior', shading, sceneMaterials),
+        resolveWallSlotMaterial(wallNode, 'topExterior', shading, sceneMaterials),
+      ]
+    : Array.from({ length: 11 }, () => wallRoleMaterial)
 
+  const wallRoleColor = resolveSurfaceColor('wall', colorPreset, sceneTheme)
   const invisible: WallMaterialArray = [
-    createInvisibleWallMaterial(DEFAULT_WALL_COLOR),
-    createInvisibleWallMaterial(getSurfaceColor(interiorSpec, DEFAULT_WALL_COLOR)),
-    createInvisibleWallMaterial(getSurfaceColor(exteriorSpec, DEFAULT_WALL_COLOR)),
+    createInvisibleWallMaterial(wallRoleColor, textures ? shading : 'solid'),
+    ...(['interior', 'exterior'] as WallSurfaceSide[]).map((side) =>
+      createInvisibleWallMaterial(
+        textures
+          ? resolveWallFaceColor(wallNode, side, sceneMaterials, wallRoleColor)
+          : wallRoleColor,
+        textures ? shading : 'solid',
+      ),
+    ),
+    ...(
+      [
+        'lowerInterior',
+        'middleInterior',
+        'upperInterior',
+        'topInterior',
+        'lowerExterior',
+        'middleExterior',
+        'upperExterior',
+        'topExterior',
+      ] as WallSurfaceSlotId[]
+    ).map((slotId) =>
+      createInvisibleWallMaterial(
+        textures
+          ? resolveWallSlotColor(wallNode, slotId, sceneMaterials, wallRoleColor)
+          : wallRoleColor,
+        textures ? shading : 'solid',
+      ),
+    ),
   ]
 
-  const highlightedVisible = mapWallMaterialArray(visible, (material) =>
-    createHighlightedWallMaterial(material, 'selection'),
-  )
-  const highlightedInvisible = mapWallMaterialArray(invisible, (material) =>
-    createHighlightedWallMaterial(material, 'selection'),
-  )
+  const translucent: WallMaterialArray = [
+    createTranslucentWallMaterial(wallRoleColor, textures ? shading : 'solid'),
+    ...(['interior', 'exterior'] as WallSurfaceSide[]).map((side) =>
+      createTranslucentWallMaterial(
+        textures
+          ? resolveWallFaceColor(wallNode, side, sceneMaterials, wallRoleColor)
+          : wallRoleColor,
+        textures ? shading : 'solid',
+      ),
+    ),
+    ...(
+      [
+        'lowerInterior',
+        'middleInterior',
+        'upperInterior',
+        'topInterior',
+        'lowerExterior',
+        'middleExterior',
+        'upperExterior',
+        'topExterior',
+      ] as WallSurfaceSlotId[]
+    ).map((slotId) =>
+      createTranslucentWallMaterial(
+        textures
+          ? resolveWallSlotColor(wallNode, slotId, sceneMaterials, wallRoleColor)
+          : wallRoleColor,
+        textures ? shading : 'solid',
+      ),
+    ),
+  ]
+
   const deleteVisible = mapWallMaterialArray(visible, (material) =>
     createHighlightedWallMaterial(material, 'delete'),
   )
   const deleteInvisible = mapWallMaterialArray(invisible, (material) =>
     createHighlightedWallMaterial(material, 'delete'),
   )
+  const deleteTranslucent = mapWallMaterialArray(translucent, (material) =>
+    createHighlightedWallMaterial(material, 'delete'),
+  )
 
   const result: WallMaterials = {
     visible,
     invisible,
+    translucent,
     deleteVisible,
     deleteInvisible,
-    highlightedVisible,
-    highlightedInvisible,
+    deleteTranslucent,
     materialHash,
   }
 
@@ -221,6 +601,14 @@ export function getMaterialsForWall(wallNode: WallNode): WallMaterials {
   return result
 }
 
-export function getVisibleWallMaterials(wallNode: WallNode): WallMaterialArray {
-  return getMaterialsForWall(wallNode).visible
+export function getVisibleWallMaterials(
+  wallNode: WallNode,
+  shading: RenderShading = 'rendered',
+  textures = true,
+  colorPreset: ColorPreset = 'clay',
+  sceneTheme?: string,
+  sceneMaterials?: SceneMaterials,
+): WallMaterialArray {
+  return getMaterialsForWall(wallNode, shading, textures, colorPreset, sceneTheme, sceneMaterials)
+    .visible
 }

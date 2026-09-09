@@ -1,16 +1,28 @@
 'use client'
 
-import { resolveLevelId, sceneRegistry, useScene } from '@pascal-app/core'
+import {
+  clearSceneHistory,
+  nodeRegistry,
+  resolveLevelId,
+  sceneRegistry,
+  useScene,
+} from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import useEditor, {
   hasCustomPersistedEditorUiState,
   normalizePersistedEditorUiState,
   type PersistedEditorUiState,
 } from '../store/use-editor'
+import { editorHostPanelRegistry } from './plugin-panels'
 
 export type SceneGraph = {
   nodes: Record<string, unknown>
   rootNodeIds: string[]
+  // Document-level scene state that travels with the graph. Optional so older
+  // payloads (and callers that only build nodes) stay valid.
+  collections?: Record<string, unknown>
+  materials?: Record<string, unknown>
+  installedPlugins?: string[]
 }
 
 type PersistedSelectionPath = {
@@ -143,11 +155,18 @@ function getEditorUiStateForRestoredSelection(
   fallbackUiState: PersistedEditorUiState,
 ): PersistedEditorUiState {
   if (!selection.levelId) {
+    const mode = fallbackUiState.phase === 'site' ? fallbackUiState.mode : 'select'
     return {
       ...fallbackUiState,
       phase: 'site',
-      mode: fallbackUiState.phase === 'site' ? fallbackUiState.mode : 'select',
-      tool: null,
+      toolMode:
+        mode === 'build'
+          ? { mode, tool: 'property-line' }
+          : mode === 'terrain-sculpt'
+            ? { mode }
+            : { mode: 'select' },
+      mode,
+      tool: mode === 'build' ? 'property-line' : null,
       structureLayer: 'elements',
       catalogCategory: null,
     }
@@ -157,6 +176,7 @@ function getEditorUiStateForRestoredSelection(
     return {
       ...fallbackUiState,
       phase: 'structure',
+      toolMode: { mode: 'select' },
       mode: 'select',
       tool: null,
       structureLayer: 'zones',
@@ -180,6 +200,7 @@ function getEditorUiStateForRestoredSelection(
   return {
     ...fallbackUiState,
     phase: shouldRestoreFurnishPhase ? 'furnish' : 'structure',
+    toolMode: { mode: 'select' },
     mode: 'select',
     tool: null,
     structureLayer: 'elements',
@@ -220,7 +241,11 @@ function getValidatedSelectionForScene(
 
     const selectedIds = selection.selectedIds.filter((id) => {
       const node = sceneNodes[id]
-      return Boolean(node) && resolveLevelId(node, sceneNodes) === levelId
+      if (!node) return false
+      if (resolveLevelId(node, sceneNodes) === levelId) return true
+
+      const def = nodeRegistry.get(node.type)
+      return def?.floorplanScope === 'building' && node.parentId === buildingId
     })
 
     return {
@@ -283,15 +308,19 @@ export function syncEditorSelectionFromCurrentScene() {
 
     if (shouldRestoreEditorUiState) {
       if (restoredSelection) {
-        useViewer.getState().setSelection(restoredSelection)
-        useEditor.setState(
+        // PersistedSelectionPath carries plain `string` ids (read from
+        // localStorage, no branded-template-literal guarantee). The viewer's
+        // SelectionPath expects branded ids. The runtime values match the
+        // brand; the cast bridges the static gap.
+        useViewer.getState().setSelection(restoredSelection as never)
+        restoreEditorUiState(
           restoredEditorUiState.phase === 'site'
             ? (selectionDrivenEditorUiState ?? restoredEditorUiState)
             : restoredEditorUiState,
         )
       } else if (restoredEditorUiState.phase === 'site') {
         useViewer.getState().resetSelection()
-        useEditor.setState(restoredEditorUiState)
+        restoreEditorUiState(restoredEditorUiState)
       } else {
         useViewer.getState().setSelection({
           buildingId: firstBuilding.id,
@@ -299,15 +328,15 @@ export function syncEditorSelectionFromCurrentScene() {
           selectedIds: [],
           zoneId: null,
         })
-        useEditor.setState(restoredEditorUiState)
+        restoreEditorUiState(restoredEditorUiState)
       }
       return
     }
 
     if (restoredSelection) {
-      useViewer.getState().setSelection(restoredSelection)
+      useViewer.getState().setSelection(restoredSelection as never)
       if (selectionDrivenEditorUiState) {
-        useEditor.setState(selectionDrivenEditorUiState)
+        restoreEditorUiState(selectionDrivenEditorUiState)
       }
       return
     }
@@ -331,6 +360,12 @@ export function syncEditorSelectionFromCurrentScene() {
   }
 }
 
+function restoreEditorUiState(state: PersistedEditorUiState) {
+  const { toolMode, mode: _mode, tool: _tool, ...rest } = state
+  useEditor.setState(rest)
+  useEditor.getState().armToolMode(toolMode)
+}
+
 function resetEditorInteractionState() {
   useViewer.getState().setHoveredId(null)
   useViewer.getState().resetSelection()
@@ -342,17 +377,15 @@ function resetEditorInteractionState() {
   sceneRegistry.clear()
   useEditor.setState({
     phase: 'site',
-    mode: 'select',
-    tool: null,
     structureLayer: 'elements',
     catalogCategory: null,
     selectedItem: null,
-    movingNode: null,
     selectedReferenceId: null,
     spaces: {},
-    editingHole: null,
+    hoveredHole: null,
     isPreviewMode: false,
   })
+  useEditor.getState().armToolMode({ mode: 'select' })
 }
 
 function hasUsableSceneGraph(sceneGraph?: SceneGraph | null): sceneGraph is SceneGraph {
@@ -364,12 +397,25 @@ function hasUsableSceneGraph(sceneGraph?: SceneGraph | null): sceneGraph is Scen
 }
 
 export function applySceneGraphToEditor(sceneGraph?: SceneGraph | null) {
+  const defaultInstalledPlugins = editorHostPanelRegistry.getDefaultInstalledPluginIds()
   if (hasUsableSceneGraph(sceneGraph)) {
-    const { nodes, rootNodeIds } = sceneGraph
-    useScene.getState().setScene(nodes as any, rootNodeIds as any)
+    const { nodes, rootNodeIds, collections, materials, installedPlugins } = sceneGraph
+    useScene.getState().setScene(nodes as any, rootNodeIds as any, {
+      collections: collections as any,
+      materials: materials as any,
+      installedPlugins: installedPlugins ?? defaultInstalledPlugins,
+      hasExplicitPluginInstallState: installedPlugins !== undefined,
+    })
   } else {
     useScene.getState().clearScene()
+    useScene.getState().setInstalledPlugins(defaultInstalledPlugins, { explicit: false })
   }
+
+  // The loaded scene is the undo floor. Loading records history entries of
+  // its own (`unloadScene` + `setScene`/`clearScene` are tracked writes), so
+  // without this reset a few Ctrl+Z presses could step past the load into the
+  // pre-load — often empty — state and wipe the whole project.
+  clearSceneHistory()
 
   syncEditorSelectionFromCurrentScene()
 }

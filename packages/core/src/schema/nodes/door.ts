@@ -18,19 +18,91 @@ export const DoorSegment = z.object({
 
 export type DoorSegment = z.infer<typeof DoorSegment>
 
+export const DoorCategory = z.enum(['interior', 'garage'])
+export const OpeningConstructionType = z.enum(['framed', 'masonry'])
+export const OpeningDimensionReference = z.enum([
+  'nominal',
+  'rough-opening',
+  'masonry-opening',
+  'finish-opening',
+])
+export const DoorType = z.enum([
+  'hinged',
+  'double',
+  'french',
+  'folding',
+  'pocket',
+  'barn',
+  'sliding',
+  'garage-sectional',
+  'garage-rollup',
+  'garage-tiltup',
+])
+export const DoorTrackStyle = z.enum(['none', 'visible', 'pocket', 'overhead'])
+
+export type DoorCategory = z.infer<typeof DoorCategory>
+export type OpeningConstructionType = z.infer<typeof OpeningConstructionType>
+export type OpeningDimensionReference = z.infer<typeof OpeningDimensionReference>
+export type DoorType = z.infer<typeof DoorType>
+export type DoorTrackStyle = z.infer<typeof DoorTrackStyle>
+
 export const DoorNode = BaseNode.extend({
   id: objectId('door'),
   type: nodeType('door'),
   material: MaterialSchema.optional(),
+  // Per-slot material overrides on the unified slot model. Keys: `panel` (the
+  // door body), `glass`. Value = a `MaterialRef` (`library:<id>` / `scene:<id>`).
+  // Absent = the body/glass default. Mirrors `ShelfNode.slots`.
+  slots: z.record(z.string(), z.string()).optional(),
 
   position: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   rotation: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   side: z.enum(['front', 'back']).optional(),
   wallId: z.string().optional(),
+  // Alternative host: a roof-segment's generated wall face (base wall
+  // under the roof or a coplanar gable end). When set, `position` is
+  // FACE-LOCAL — [u along the face, v height, z from the wall mid-plane]
+  // — exactly the wall-child convention; the renderer mounts the node
+  // inside the face frame (`getRoofWallFaceFrame`), which is what makes
+  // hosted children track segment resizes live.
+  roofSegmentId: z.string().optional(),
+  roofFace: z.enum(['front', 'back', 'right', 'left']).optional(),
 
   // Overall dimensions
   width: z.number().default(0.9),
   height: z.number().default(2.1),
+
+  // Construction-document identity. `mark` overrides the deterministic
+  // level fallback (101, 102, ...). Rough-opening dimensions stay optional
+  // because they are manufacturer/framing inputs, not safe derivations from
+  // the nominal modeled size.
+  mark: z.string().trim().max(16).optional(),
+  constructionType: OpeningConstructionType.default('framed'),
+  dimensionReference: OpeningDimensionReference.default('nominal'),
+  roughOpeningWidth: z.number().positive().optional(),
+  roughOpeningHeight: z.number().positive().optional(),
+  masonryOpeningWidth: z.number().positive().optional(),
+  masonryOpeningHeight: z.number().positive().optional(),
+  finishOpeningWidth: z.number().positive().optional(),
+  finishOpeningHeight: z.number().positive().optional(),
+
+  // Door family
+  doorCategory: DoorCategory.default('interior'),
+  doorType: DoorType.default('hinged'),
+  leafCount: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]).default(1),
+  operationState: z.number().min(0).max(1).default(0),
+  slideDirection: z.enum(['left', 'right']).default('left'),
+  trackStyle: DoorTrackStyle.default('none'),
+  garagePanelCount: z.number().int().min(1).max(12).default(4),
+
+  // Opening mode
+  openingKind: z.enum(['door', 'opening']).default('door'),
+  openingShape: z.enum(['rectangle', 'rounded', 'arch']).default('rectangle'),
+  openingRadiusMode: z.enum(['all', 'individual']).default('all'),
+  openingTopRadii: z.tuple([z.number(), z.number()]).default([0.15, 0.15]),
+  cornerRadius: z.number().min(0).default(0.15),
+  archHeight: z.number().min(0).default(0.45),
+  openingRevealRadius: z.number().min(0).default(0.025),
 
   // Frame
   frameThickness: z.number().default(0.05),
@@ -41,6 +113,11 @@ export const DoorNode = BaseNode.extend({
   // Swing
   hingesSide: z.enum(['left', 'right']).default('left'),
   swingDirection: z.enum(['inward', 'outward']).default('inward'),
+  swingAngle: z
+    .number()
+    .min(0)
+    .max(Math.PI / 2)
+    .default(0),
 
   // Leaf segments — stacked top to bottom, each with its own column split
   segments: z.array(DoorSegment).default([
@@ -76,9 +153,11 @@ export const DoorNode = BaseNode.extend({
   panicBarHeight: z.number().default(1.0),
 }).describe(dedent`Door node - a parametric door placed on a wall
   - position: center of the door in wall-local coordinate system (Y = height/2, always at floor)
+  - doorCategory/doorType: explicit operation family, defaulting old doors to interior hinged
+  - openingKind/openingShape: hinged door or frameless wall opening shape
   - segments: rows stacked top to bottom, each defining its own columnRatios
-  - type 'empty' = flush flat fill, 'panel' = raised/recessed panel, 'glass' = glazed
-  - hingesSide/swingDirection: which way the door opens
+  - type 'empty' = no leaf fill for that segment, 'panel' = raised/recessed panel, 'glass' = glazed
+  - hingesSide/swingDirection/swingAngle: which way the door opens and how far it is currently open
   - doorCloser/panicBar: commercial and emergency hardware options
 `)
 

@@ -1,5 +1,6 @@
 import dedent from 'dedent'
 import { z } from 'zod'
+import { AssetUrl } from '../asset-url'
 import { BaseNode, nodeType, objectId } from '../base'
 import type { CollectionId } from '../collections'
 
@@ -79,10 +80,34 @@ const assetSchema = z.object({
   category: z.string(),
   name: z.string(),
   thumbnail: z.string(),
-  src: z.string(),
+  // Optional top-down 2D image shown inside the item's footprint on the
+  // floor plan. When present, replaces the default diagonal-cross marker.
+  floorPlanUrl: z.string().optional(),
+  // Where the item came from in the catalog. Used by the editor's items
+  // panel to filter Library / Community / Mine. The server populates it
+  // from `items.userId`: null → 'library', current user → 'mine',
+  // other user → 'community'. Defaults to 'library' when absent (e.g.
+  // the seeded built-in catalog).
+  source: z.enum(['library', 'community', 'mine']).default('library'),
+  // True when the item belongs to the caller and is still in draft status.
+  // The catalog only loads my drafts (other users' drafts are never
+  // published to the catalog). Used so the Community filter can include
+  // *my* published items alongside other users', while leaving drafts
+  // visible only under Mine.
+  isDraft: z.boolean().optional(),
+  src: AssetUrl,
   dimensions: z.tuple([z.number(), z.number(), z.number()]).default([1, 1, 1]), // [w, h, d]
   attachTo: z.enum(['wall', 'wall-side', 'ceiling']).optional(),
+  // Ceiling fixtures (e.g. recessed downlights) that embed *into* the ceiling
+  // rather than hang below it: the item seats flush with the ceiling plane
+  // (its body rising into the void above) and the ceiling is cut out around
+  // the item's footprint. Ignored unless `attachTo === 'ceiling'`.
+  recessed: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
+  // Function-axis tag slugs from the taxonomy. Drives the hierarchical
+  // Items-tab browse: a tree node matches when any of its descendant slugs
+  // appears here. Absent for the seeded built-in catalog.
+  functionTags: z.array(z.string()).optional(),
   // These are "Corrective" transforms to normalize the GLB
   offset: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
   rotation: z.tuple([z.number(), z.number(), z.number()]).default([0, 0, 0]),
@@ -110,9 +135,40 @@ export const ItemNode = BaseNode.extend({
   // Wall attachment properties (only used when asset.attachTo is "wall" or "wall-side")
   wallId: z.string().optional(),
   wallT: z.number().optional(), // 0-1 parametric position along wall
+  // Alternative wall host: a roof-segment's generated wall face. When
+  // set, `position` is FACE-LOCAL — [u along the face, v = bottom edge,
+  // z from the wall mid-plane] — exactly the wall-child convention
+  // (ItemSystem's wall-side push applies the same way); the renderer
+  // mounts the node inside the face frame (`getRoofWallFaceFrame`).
+  roofSegmentId: z.string().optional(),
+  roofFace: z.enum(['front', 'back', 'right', 'left']).optional(),
+  // Alternative wall-like host: a planar block face. Position is
+  // FACE-LOCAL [u, v, normal offset], relative to the live face centroid.
+  // The renderer rebuilds the frame from the face normal so the item follows
+  // later edits that translate or slope the face.
+  blockFaceId: z.string().optional(),
+
+  // Persisted floor-support host (canonical doc — the same field on other
+  // floor-placed kinds and walls follows these rules). Written at
+  // placement/commit ONLY when overlapping slabs disagree on elevation
+  // (ambiguity); absent/null means "elect the support fresh on every
+  // read", which is the historical behavior. Read paths PREFER this slab
+  // while it still exists and still overlaps the node's footprint, and
+  // silently fall back to election otherwise. Deleting the host slab
+  // strips the field (deleteNodesAction); a host merely reshaped away is
+  // deliberately kept so hosting resumes if the slab's polygon returns.
+  // The sentinel value 'ground' (GROUND_SUPPORT_ID) pins the node to the
+  // level base — written when a pointer-capped commit elected the ground
+  // while a slab (e.g. an elevated deck) still overlapped the footprint.
+  supportSlabId: z.string().optional(),
 
   // Denormalized references to collections this node belongs to
   collectionIds: z.array(z.custom<CollectionId>()).optional(),
+
+  // Per-slot material overrides. Key = slot id (see deriveSlotId), value = a
+  // MaterialRef string ('library:<id>' or 'scene:<id>'). Absent = authored /
+  // registry default. A dangling ref renders the default (never blocks).
+  slots: z.record(z.string(), z.string()).optional(),
 
   asset: assetSchema,
 }).describe(dedent`Item node - used to represent a item in the building
@@ -130,6 +186,20 @@ export const ItemNode = BaseNode.extend({
 `)
 
 export type ItemNode = z.infer<typeof ItemNode>
+
+export const LOW_PROFILE_ITEM_SURFACE_MAX_HEIGHT = 0.1
+
+/**
+ * Low, floor-resting items like rugs and parking mats can receive items visually,
+ * but should not become item parents or block normal floor placement.
+ */
+export function isLowProfileItemSurface(item: ItemNode): boolean {
+  if (item.asset.attachTo) return false
+  const surfaceHeight = item.asset.surface
+    ? item.asset.surface.height * item.scale[1]
+    : getScaledDimensions(item)[1]
+  return surfaceHeight <= LOW_PROFILE_ITEM_SURFACE_MAX_HEIGHT
+}
 
 /**
  * Returns the effective world-space dimensions of an item after applying its scale.

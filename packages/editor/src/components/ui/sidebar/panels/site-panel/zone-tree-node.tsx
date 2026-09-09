@@ -1,13 +1,14 @@
-import { type AnyNodeId, useScene, type ZoneNode } from '@pascal-app/core'
+import { useScene, type ZoneNode } from '@pascal-app/core'
 import { useViewer } from '@pascal-app/viewer'
 import { memo, useCallback, useState } from 'react'
 import { ColorDot } from './../../../../../components/ui/primitives/color-dot'
+import { formatAreaLabel } from './../../../../../lib/measurements'
 import { InlineRenameInput } from './inline-rename-input'
 import { focusTreeNode, TreeNodeWrapper } from './tree-node'
 import { TreeNodeActions } from './tree-node-actions'
 
 interface ZoneTreeNodeProps {
-  nodeId: AnyNodeId
+  nodeId: ZoneNode['id']
   depth: number
   isLast?: boolean
 }
@@ -26,6 +27,7 @@ export const ZoneTreeNode = memo(function ZoneTreeNode({
   const isHovered = useViewer((state) => state.hoveredId === nodeId)
   const setSelection = useViewer((state) => state.setSelection)
   const setHoveredId = useViewer((state) => state.setHoveredId)
+  const unit = useViewer((state) => state.unit)
 
   const handleClick = useCallback(() => setSelection({ zoneId: nodeId }), [nodeId, setSelection])
   const handleDoubleClick = useCallback(() => focusTreeNode(nodeId), [nodeId])
@@ -34,9 +36,7 @@ export const ZoneTreeNode = memo(function ZoneTreeNode({
   const handleStartEditing = useCallback(() => setIsEditing(true), [])
   const handleStopEditing = useCallback(() => setIsEditing(false), [])
 
-  // Calculate approximate area from polygon
-  const area = calculatePolygonArea(polygon).toFixed(1)
-  const defaultName = `Zone (${area}m²)`
+  const defaultName = `Zone (${formatAreaLabel(calculatePolygonArea(polygon), unit)})`
 
   return (
     <TreeNodeWrapper
@@ -44,7 +44,9 @@ export const ZoneTreeNode = memo(function ZoneTreeNode({
       depth={depth}
       expanded={false}
       hasChildren={false}
-      icon={<ColorDot color={color} onChange={(c) => updateNode(nodeId, { color: c })} />}
+      icon={
+        <ColorDot color={color ?? '#3b82f6'} onChange={(c) => updateNode(nodeId, { color: c })} />
+      }
       isHovered={isHovered}
       isLast={isLast}
       isSelected={isSelected}
@@ -78,8 +80,11 @@ function calculatePolygonArea(polygon: Array<[number, number]>): number {
 
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n
-    area += polygon[i]?.[0] * polygon[j]?.[1]
-    area -= polygon[j]?.[0] * polygon[i]?.[1]
+    const current = polygon[i]
+    const next = polygon[j]
+    if (!(current && next)) continue
+    area += current[0] * next[1]
+    area -= next[0] * current[1]
   }
 
   return Math.abs(area) / 2
