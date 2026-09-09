@@ -1,8 +1,14 @@
 # Skill package validation
 
-Bundle version: **0.1.3**. `pascal-3d` skill metadata version: **0.1.0**. `furniture-fit` skill metadata version: **0.1.2**. Prepared September 9, 2026.
+Bundle version: **0.1.4**. `pascal-3d` skill metadata version: **0.1.0**. `furniture-fit` skill metadata version: **0.1.3**. Prepared September 9, 2026.
 
-## Bundle 0.1.3 validation
+## Bundle 0.1.4 candidate validation
+
+This unreleased candidate adds exactly one structured, blocker-aware `nextAction` to each furniture-fit report. The action follows the unresolved part of the user's requested decision: a passing footprint with unresolved height evidence requests the decisive measurement; a failed footprint offers a pose only when known geometry supports one; exhausted poses request a user-supplied alternate instead of inventing one; and a prospective candidate excluded from the door check requests a candidate-aware read-only check. Only a result with no unresolved requested blocker offers an optional related item or pose check. Every next action carries available project/revision context and states that it does not authorize project mutation, account or workspace changes, publication, rendering or generation work, or additional spending.
+
+The candidate `furniture-fit/SKILL.md` SHA-256 is `52f050d487344afe2ee401cbca15722cc15b875f06d4537aab9e91cffbab0760`. Package validation and strict plugin-manifest validation cover the source shape, bundled references, canonical authority and cost boundaries across every example, and structured semantic next-action cases with exact required evidence vectors, including eval 2's passing-pose, failed-pose, and missing-height combination. No native agent-host task cohort, clean installation, publication, marketplace review, external adoption, or retention result is claimed for bundle 0.1.4; the skill metadata therefore records `package-checks-only`.
+
+## Prior bundle 0.1.3 validation
 
 This release adds a fail-closed input gate for furniture assessments. When the request itself establishes that a decisive dimension, room scale, target, pose, or clearance is missing, the skill preserves the supplied facts and asks only for the blocking input instead of producing conditional fit thresholds. A minimal read-only scene lookup remains allowed when it can resolve that value from existing measured evidence; assessment and mutation calls remain blocked until the input is resolved.
 

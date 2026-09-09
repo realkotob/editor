@@ -4,9 +4,9 @@ description: Assess whether furniture fits in a measured Pascal room or layout. 
 license: MIT
 compatibility: Requires a Pascal MCP connection for verified scene checks. Can still produce an input-gap report when the scene or measurements are unavailable.
 metadata:
-  version: "0.1.2"
+  version: "0.1.3"
   source-reviewed: "2026-09-09"
-  native-host-validation: "source-hash-recorded-separately"
+  native-host-validation: "package-checks-only"
 ---
 
 # Furniture fit
@@ -91,7 +91,26 @@ Never leave a temporary test object in the project unless the user asked to keep
 
 Test every orientation the user requested. Do not assume a 90-degree rotation helps: a long, shallow item can become too deep for a narrow room. Report the effective footprint for each pose and preserve the rotation convention.
 
-When the requested pose fails, propose only alternatives supported by the same evidence, such as a 90-degree rotation, a stated offset, a smaller maximum footprint, or a different room. Re-run the checks for any alternative described as passing.
+When the requested pose fails, propose only alternatives supported by the same evidence, such as a 90-degree rotation or stated offset that the known room geometry makes plausible. Re-run the checks for any alternative described as passing. If every tested pose fails and the evidence does not support a specific untested pose, do not invent one; ask the user for an exact alternate item, target room or zone, or pose instead.
+
+## Return one bounded next action
+
+Include exactly one structured `nextAction` in every report. It is an optional task the user can approve, not permission to execute it. Choose its kind from the unresolved blocker in the user's requested decision, rather than from the footprint headline alone. A passing footprint does not make a missing height measurement or an unchecked requested door constraint optional.
+
+- Use `kind: request_measurement` when a missing or unproven measurement blocks the requested conclusion, including when the footprint passes. Ask only for the first decisive measurement or smallest blocking set. Do not add an alternate pose, conditional fit threshold, or unrelated setup task.
+- Use `kind: check_alternate_pose` when the requested footprint fails and known room geometry supports one specific, untested position and Y rotation. Label it proposed and unverified, and require the same containment, collision, clearance, and applicable door checks to run again before calling it a pass.
+- Use `kind: request_alternate_item_or_target` when every tested footprint pose fails, or another requested physical constraint conclusively fails, and no evidence-backed alternative exists. Ask the user to supply one exact alternate item and dimensions, target room or zone, or pose; do not invent any of them.
+- Use `kind: complete_unresolved_check` when the measurements and geometry exist but the available read-only assessment path did not include a requested constraint. For example, a clean `verify_scene` result does not check a prospective candidate supplied only to `check_collisions`; request a candidate-aware door-access check rather than calling access passed or asking for unrelated measurements.
+- Use `kind: check_related_item_or_pose` only when the requested decision has no unresolved blocker and the footprint fits. Offer one specific related item or pose check that uses the same measured context. Do not turn the passing result into a purchase, delivery, or installation recommendation.
+
+Carry the exact available project, revision, graph hash, level, zone, and item context into `nextAction.context`; use `null` rather than guessing missing identifiers. State the minimum `requiredInput`. Use these exact boundary lines in every `nextAction`:
+
+```yaml
+authority: Read-only; no account or workspace changes, publication, save, or project mutation authorized.
+cost: No rendering, generation, paid operation, or additional spending authorized.
+```
+
+If the next task is later accepted, re-read the current project status and advertised tool schemas before acting; a next action never freezes scene state or extends the current authorization.
 
 ## Separate the checks
 
@@ -123,6 +142,7 @@ Use the exact report shape in [references/report-template.md](references/report-
 - a row for every supported and unsupported check;
 - collision or door issue IDs;
 - verified alternatives;
+- one blocker-aware `nextAction` with its required input, exact available context, authority, and cost boundary;
 - the exact `editorUrl` returned by Pascal when a persistent project is involved.
 
 Before sending the report, compare its numeric inputs and source IDs against both the user's constraint record and the actual tool output. Copy level, zone, item, candidate, and project IDs exactly; do not recreate them from memory. A missing requested check must be identified as incomplete, even when a narrower calculation passes.
@@ -131,5 +151,6 @@ The examples are synthetic and illustrate correct claim boundaries:
 
 - [examples/clear-footprint.md](examples/clear-footprint.md)
 - [examples/rotated-footprint-fails.md](examples/rotated-footprint-fails.md)
+- [examples/all-tested-poses-fail.md](examples/all-tested-poses-fail.md)
 - [examples/insufficient-evidence.md](examples/insufficient-evidence.md)
 - [examples/unproven-height-metadata.md](examples/unproven-height-metadata.md)

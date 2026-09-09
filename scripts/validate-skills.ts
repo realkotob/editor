@@ -4,8 +4,20 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const skillNames = ['pascal-3d', 'furniture-fit'] as const
-const skillVersions = { 'pascal-3d': '0.1.0', 'furniture-fit': '0.1.2' } as const
-const pluginVersion = '0.1.3'
+const skillVersions = { 'pascal-3d': '0.1.0', 'furniture-fit': '0.1.3' } as const
+const pluginVersion = '0.1.4'
+const furnitureNextActionKinds = [
+  'request_measurement',
+  'check_alternate_pose',
+  'request_alternate_item_or_target',
+  'complete_unresolved_check',
+  'check_related_item_or_pose',
+] as const
+type FurnitureNextActionKind = (typeof furnitureNextActionKinds)[number]
+const furnitureNextActionAuthority =
+  'authority: Read-only; no account or workspace changes, publication, save, or project mutation authorized.'
+const furnitureNextActionCost =
+  'cost: No rendering, generation, paid operation, or additional spending authorized.'
 const failures: string[] = []
 
 function fail(message: string) {
@@ -150,6 +162,262 @@ for (const skillName of skillNames) {
     if (/sk_(?:live|test)_[A-Za-z0-9]{8,}/.test(data)) {
       fail(`${relative(root, path)} contains a credential-shaped value`)
     }
+  }
+}
+
+const furnitureSkill = read(join(root, 'skills', 'furniture-fit', 'SKILL.md'))
+const furnitureReport = read(
+  join(root, 'skills', 'furniture-fit', 'references', 'report-template.md'),
+)
+for (const kind of furnitureNextActionKinds) {
+  if (!(furnitureSkill.includes(kind) && furnitureReport.includes(kind))) {
+    fail(`furniture-fit: missing nextAction kind ${kind}`)
+  }
+}
+for (const field of ['requiredInput:', 'context:']) {
+  if (!furnitureReport.includes(field)) {
+    fail(`furniture-fit report template is missing nextAction field ${field}`)
+  }
+}
+for (const [label, content] of [
+  ['skill', furnitureSkill],
+  ['report template', furnitureReport],
+] as const) {
+  if (!content.includes(furnitureNextActionAuthority)) {
+    fail(`furniture-fit ${label} is missing the canonical nextAction authority boundary`)
+  }
+  if (!content.includes(furnitureNextActionCost)) {
+    fail(`furniture-fit ${label} is missing the canonical nextAction cost boundary`)
+  }
+}
+const furnitureExamplesRoot = join(root, 'skills', 'furniture-fit', 'examples')
+for (const entry of readdirSync(furnitureExamplesRoot, { withFileTypes: true })) {
+  if (!entry.isFile() || !entry.name.endsWith('.md')) continue
+  const example = read(join(furnitureExamplesRoot, entry.name))
+  if (!example.includes('nextAction:')) {
+    fail(`furniture-fit example ${entry.name} is missing nextAction`)
+  }
+  if (!example.includes(`  ${furnitureNextActionAuthority}`)) {
+    fail(`furniture-fit example ${entry.name} is missing the canonical authority boundary`)
+  }
+  if (!example.includes(`  ${furnitureNextActionCost}`)) {
+    fail(`furniture-fit example ${entry.name} is missing the canonical cost boundary`)
+  }
+}
+
+type FurnitureDecisionContext = {
+  has_passing_footprint?: unknown
+  has_failing_requested_pose?: unknown
+  has_blocking_failure?: unknown
+  missing_blocking_measurement?: unknown
+  supported_unchecked_alternative?: unknown
+  unresolved_requested_check_due_to_tool_limit?: unknown
+}
+
+const furnitureDecisionContextKeys = [
+  'has_passing_footprint',
+  'has_failing_requested_pose',
+  'has_blocking_failure',
+  'missing_blocking_measurement',
+  'supported_unchecked_alternative',
+  'unresolved_requested_check_due_to_tool_limit',
+] as const
+type RequiredFurnitureDecisionContext = Record<
+  (typeof furnitureDecisionContextKeys)[number],
+  boolean
+>
+
+function deriveFurnitureNextAction(context: FurnitureDecisionContext): FurnitureNextActionKind {
+  if (context.missing_blocking_measurement === true) return 'request_measurement'
+  if (context.has_blocking_failure === true) {
+    return context.supported_unchecked_alternative === true
+      ? 'check_alternate_pose'
+      : 'request_alternate_item_or_target'
+  }
+  if (context.unresolved_requested_check_due_to_tool_limit === true) {
+    return 'complete_unresolved_check'
+  }
+  return 'check_related_item_or_pose'
+}
+
+const furnitureEvalData = parseJson(
+  join(root, 'skills', 'furniture-fit', 'evals', 'evals.json'),
+) as {
+  evals?: Array<{
+    id?: unknown
+    semantic_case?: unknown
+    decision_context?: FurnitureDecisionContext
+    expected_next_action?: {
+      kind?: unknown
+      target?: unknown
+      must_not?: unknown
+    }
+  }>
+}
+const semanticDecisionCases = new Map<string, NonNullable<typeof furnitureEvalData.evals>[number]>()
+for (const item of furnitureEvalData.evals ?? []) {
+  if (typeof item.semantic_case !== 'string') continue
+  if (semanticDecisionCases.has(item.semantic_case)) {
+    fail(`furniture-fit: duplicate semantic nextAction case ${item.semantic_case}`)
+  }
+  semanticDecisionCases.set(item.semantic_case, item)
+}
+const requiredSemanticCases = new Map<
+  string,
+  {
+    evalId: number
+    kind: FurnitureNextActionKind
+    context: RequiredFurnitureDecisionContext
+  }
+>([
+  [
+    'no-unresolved-requested-blocker',
+    {
+      evalId: 1,
+      kind: 'check_related_item_or_pose',
+      context: {
+        has_passing_footprint: true,
+        has_failing_requested_pose: false,
+        has_blocking_failure: false,
+        missing_blocking_measurement: false,
+        supported_unchecked_alternative: false,
+        unresolved_requested_check_due_to_tool_limit: false,
+      },
+    },
+  ],
+  [
+    'mixed-passing-and-failing-poses-height-blocker',
+    {
+      evalId: 2,
+      kind: 'request_measurement',
+      context: {
+        has_passing_footprint: true,
+        has_failing_requested_pose: true,
+        has_blocking_failure: false,
+        missing_blocking_measurement: true,
+        supported_unchecked_alternative: false,
+        unresolved_requested_check_due_to_tool_limit: false,
+      },
+    },
+  ],
+  [
+    'mixed-evidence-height-blocker',
+    {
+      evalId: 9,
+      kind: 'request_measurement',
+      context: {
+        has_passing_footprint: true,
+        has_failing_requested_pose: false,
+        has_blocking_failure: false,
+        missing_blocking_measurement: true,
+        supported_unchecked_alternative: false,
+        unresolved_requested_check_due_to_tool_limit: false,
+      },
+    },
+  ],
+  [
+    'all-tested-poses-fail',
+    {
+      evalId: 10,
+      kind: 'request_alternate_item_or_target',
+      context: {
+        has_passing_footprint: false,
+        has_failing_requested_pose: true,
+        has_blocking_failure: true,
+        missing_blocking_measurement: false,
+        supported_unchecked_alternative: false,
+        unresolved_requested_check_due_to_tool_limit: false,
+      },
+    },
+  ],
+  [
+    'prospective-candidate-door-limit',
+    {
+      evalId: 11,
+      kind: 'complete_unresolved_check',
+      context: {
+        has_passing_footprint: true,
+        has_failing_requested_pose: false,
+        has_blocking_failure: false,
+        missing_blocking_measurement: false,
+        supported_unchecked_alternative: false,
+        unresolved_requested_check_due_to_tool_limit: true,
+      },
+    },
+  ],
+  [
+    'supported-untested-alternate',
+    {
+      evalId: 12,
+      kind: 'check_alternate_pose',
+      context: {
+        has_passing_footprint: false,
+        has_failing_requested_pose: true,
+        has_blocking_failure: true,
+        missing_blocking_measurement: false,
+        supported_unchecked_alternative: true,
+        unresolved_requested_check_due_to_tool_limit: false,
+      },
+    },
+  ],
+])
+for (const [semanticCase, requirement] of requiredSemanticCases) {
+  const item = semanticDecisionCases.get(semanticCase)
+  if (!item?.decision_context) {
+    fail(`furniture-fit: missing semantic nextAction case ${semanticCase}`)
+    continue
+  }
+  if (item.id !== requirement.evalId) {
+    fail(`furniture-fit: semantic case ${semanticCase} must be eval ${requirement.evalId}`)
+  }
+  const contextKeys = Object.keys(item.decision_context).sort()
+  const expectedKeys = [...furnitureDecisionContextKeys].sort()
+  if (
+    contextKeys.length !== expectedKeys.length ||
+    contextKeys.some((key, index) => key !== expectedKeys[index]) ||
+    furnitureDecisionContextKeys.some((key) => typeof item.decision_context?.[key] !== 'boolean')
+  ) {
+    fail(`furniture-fit: semantic case ${semanticCase} needs the complete boolean decision context`)
+  }
+  for (const key of furnitureDecisionContextKeys) {
+    if (item.decision_context[key] !== requirement.context[key]) {
+      fail(
+        `furniture-fit: semantic case ${semanticCase} has ${key}=${String(item.decision_context[key])}, expected ${String(requirement.context[key])}`,
+      )
+    }
+  }
+  if (
+    item.decision_context.supported_unchecked_alternative === true &&
+    item.decision_context.has_blocking_failure !== true
+  ) {
+    fail(`furniture-fit: semantic case ${semanticCase} cannot offer an alternate without a failure`)
+  }
+  if (
+    item.decision_context.has_passing_footprint !== true &&
+    item.decision_context.has_blocking_failure !== true &&
+    item.decision_context.missing_blocking_measurement !== true &&
+    item.decision_context.unresolved_requested_check_due_to_tool_limit !== true
+  ) {
+    fail(`furniture-fit: semantic case ${semanticCase} has no result or blocker`)
+  }
+  const expected = item.expected_next_action
+  if (
+    !expected ||
+    !furnitureNextActionKinds.includes(expected.kind as FurnitureNextActionKind) ||
+    typeof expected.target !== 'string' ||
+    !expected.target ||
+    !Array.isArray(expected.must_not) ||
+    expected.must_not.length === 0 ||
+    expected.must_not.some((value) => typeof value !== 'string' || !value)
+  ) {
+    fail(`furniture-fit: semantic case ${semanticCase} has an invalid expected_next_action`)
+    continue
+  }
+  const derived = deriveFurnitureNextAction(item.decision_context)
+  if (derived !== expected.kind || expected.kind !== requirement.kind) {
+    fail(
+      `furniture-fit: semantic case ${semanticCase} derives ${derived}, expected ${requirement.kind}`,
+    )
   }
 }
 
