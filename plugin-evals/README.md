@@ -1,6 +1,6 @@
 # Publishing evaluation fixtures
 
-`publishing-cases.json` is the minimum cross-skill release suite. It contains at least five positive cases and three negative or refusal-boundary cases. Each standalone skill also bundles:
+`publishing-cases.json` is the minimum cross-skill release suite. It contains at least five positive cases with reproducible fixtures and expected result shapes, plus three negative or refusal-boundary cases with explicit reasons the plugin must not complete the requested action. Each standalone skill also bundles:
 
 - `evals/evals.json` for task behavior;
 - `evals/trigger-evals.json` for description routing, with at least five positive and three negative queries.
