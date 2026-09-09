@@ -16,4 +16,6 @@ Request the smallest decisive measurements:
 2. Clear soffit height at the intended location.
 3. Narrowest clear width and height along the entry route, including tight turns.
 
+Stop there. Do not add conditional maximum-size, fit, height, or route thresholds while those decisive measurements are missing.
+
 Do not create a placeholder with guessed dimensions and report it as a verified fit.

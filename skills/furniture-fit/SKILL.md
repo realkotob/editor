@@ -4,8 +4,8 @@ description: Assess whether furniture fits in a measured Pascal room or layout. 
 license: MIT
 compatibility: Requires a Pascal MCP connection for verified scene checks. Can still produce an input-gap report when the scene or measurements are unavailable.
 metadata:
-  version: "0.1.1"
-  source-reviewed: "2026-09-08"
+  version: "0.1.2"
+  source-reviewed: "2026-09-09"
   native-host-validation: "source-hash-recorded-separately"
 ---
 
@@ -26,6 +26,8 @@ Collect or verify:
 - whether the user wants a read-only report or a saved placement.
 
 Reject zero, negative, non-finite, or ambiguous dimensions. Treat `"1,234"` as ambiguous until the user clarifies the decimal/thousands convention. If a photo, listing, or scan has no trustworthy scale, return `insufficient evidence` and name the minimum measurement needed. Do not infer product dimensions from appearance.
+
+Validate the inputs needed for the requested conclusion before assessing fit. When the request itself already establishes that a decisive input—such as a dimension, room scale, target, pose, or explicit clearance—is missing, invalid, or ambiguous, stop with `insufficient evidence` before assessment or mutation calls. Preserve the valid values already supplied, identify only the blocking input or smallest blocking set, and ask only for the measurements or choices needed to continue. Do not calculate conditional fit thresholds, maximum allowable sizes, hypothetical clearances, height comparisons, or alternative poses while that decisive input is unresolved. If an existing Pascal scene might contain a measured value needed to resolve the input, use only the minimum read-only project or geometry lookup needed to find and verify that value and its provenance; if it remains unresolved, stop. Do not call candidate, collision, placement, validation, or save tools, and do not mutate the project. A preliminary calculation is appropriate only when all inputs decisive for that calculation are exact and the connected release lacks the read-only candidate capability; it is not a substitute for missing measurements.
 
 Before calling tools, record the user's constraints: item width, height, depth, original unit and meter conversion, target level/zone, position, rotations, and required clearance. Re-read the request when filling this record; scene metadata and examples cannot replace supplied values. Preserve known dimensions when asking for a missing one. Never replace a supplied height with a placeholder just because the footprint test ignores height.
 
@@ -72,7 +74,7 @@ Use this as a transparent cross-check of the tool-backed pose, with radians in s
 
 Prefer a server tool that accepts the supplied candidate dimensions if the connected release advertises one. Inspect its schema before calling it. In the current repository source, `check_collisions.candidate` accepts an ID, name, level ID, `[width, height, depth]`, position, Y rotation, and optional source identifiers. It creates an in-memory prospective item for that call and never adds it to the scene. Confirm `candidateItemId` in the result, use its returned footprint and collision evidence, and assess room containment separately against the measured zone boundary.
 
-Compare every candidate call against the recorded user constraints before executing it. Pass all supplied dimensions exactly after unit conversion, and pass the requested clearance rather than silently substituting zero. If a required candidate dimension is missing, ask only for that value or give a clearly preliminary planar calculation; do not invent a value to satisfy the schema. Check the returned source dimensions, pose, and clearance against the request before treating the result as evidence.
+Compare every candidate call against the recorded user constraints before executing it. Pass all supplied dimensions exactly after unit conversion, and pass the requested clearance rather than silently substituting zero. If a required candidate dimension or scale is missing, follow the input gate above: use a minimal read-only scene lookup only when it can resolve the value from existing measured evidence; otherwise stop before assessment or mutation calls and ask only for the blocking value. Do not invent a value to satisfy the schema. Check the returned source dimensions, pose, and clearance against the request before treating the result as evidence.
 
 `verify_scene` checks saved or active scene items, not this prospective candidate. Its clean result cannot pass the candidate's default spacing or door access. Mark those candidate rows `not checked` unless a separate check includes the candidate and the required geometry; identify that evidence explicitly. A candidate collision check at the requested gap supports that gap only.
 

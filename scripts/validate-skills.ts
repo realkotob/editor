@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const skillNames = ['pascal-3d', 'furniture-fit'] as const
-const skillVersions = { 'pascal-3d': '0.1.0', 'furniture-fit': '0.1.1' } as const
-const pluginVersion = '0.1.2'
+const skillVersions = { 'pascal-3d': '0.1.0', 'furniture-fit': '0.1.2' } as const
+const pluginVersion = '0.1.3'
 const failures: string[] = []
 
 function fail(message: string) {
