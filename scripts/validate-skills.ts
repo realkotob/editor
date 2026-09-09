@@ -443,6 +443,9 @@ const publishing = parseJson(publishingFile) as {
     kind?: unknown
     prompt?: unknown
     expected?: unknown
+    expected_result_shape?: unknown
+    required_fixture?: unknown
+    why_not?: unknown
   }>
 }
 const publishingCases = publishing.cases ?? []
@@ -458,9 +461,20 @@ for (const item of publishingCases) {
   if (!skillNames.includes(item.skill as (typeof skillNames)[number])) {
     fail(`Publishing case ${String(item.id)} has an unknown skill`)
   }
-  if (item.kind === 'positive') positivePublishingCases++
-  else if (item.kind === 'negative') negativePublishingCases++
-  else fail(`Publishing case ${String(item.id)} needs kind positive or negative`)
+  if (item.kind === 'positive') {
+    positivePublishingCases++
+    if (typeof item.expected_result_shape !== 'string' || !item.expected_result_shape) {
+      fail(`Positive publishing case ${String(item.id)} needs an expected result shape`)
+    }
+    if (typeof item.required_fixture !== 'string' || !item.required_fixture) {
+      fail(`Positive publishing case ${String(item.id)} needs a reproducible fixture`)
+    }
+  } else if (item.kind === 'negative') {
+    negativePublishingCases++
+    if (typeof item.why_not !== 'string' || !item.why_not) {
+      fail(`Negative publishing case ${String(item.id)} needs a reason not to complete the action`)
+    }
+  } else fail(`Publishing case ${String(item.id)} needs kind positive or negative`)
   if (typeof item.prompt !== 'string' || !item.prompt)
     fail(`Publishing case ${String(item.id)} needs a prompt`)
   if (typeof item.expected !== 'string' || !item.expected) {
